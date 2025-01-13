@@ -1,0 +1,20 @@
+version: "3.8"
+
+services:
+  webapp:
+    build: .
+    container_name: rust_webapp
+    networks:
+      - wasmiot-net
+    ports:
+      - "8080:8080"
+    environment:
+      # Example environment variables, if you need them:
+      SERVER_NAME: "0.0.0.0"
+      FLASK_PORT: "8080"
+      ORCHESTRATOR_URL: "http://wasmiot-orchestrator:3000"
+      # ORCHESTRATOR_URL: "http://some-service:1234"
+
+networks:
+  wasmiot-net:
+    external: true

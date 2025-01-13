@@ -189,6 +189,7 @@ fn wait_until_ready_and_register(mut zc: WebthingZeroconf) {
                     thread::sleep(Duration::from_secs(1));
                 }
             }
+            break;
         }
 
         // If orchestrator is set, do the same POST
@@ -230,20 +231,20 @@ async fn post_test(input: web::Json<PostInput>) -> impl Responder {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    
     // Initialize logging
     env_logger::builder().filter(None, LevelFilter::Debug).init();
-
     // Create the Zeroconf struct
     let zc = WebthingZeroconf::new();
     let (host, port) = (zc.host.clone(), zc.port);
-
+    println!("host:{}, port:{}", host, port);
     // Start the Actix server
     let server = HttpServer::new(|| {
         App::new()
             .route("/get_test", web::get().to(get_test))
             .route("/post_test", web::post().to(post_test))
     })
-    .bind((host.clone(), port))?;
+    .bind(("0.0.0.0", port))?;
 
     info!("Starting Actix web server at http://{}:{}/", host, port);
 
