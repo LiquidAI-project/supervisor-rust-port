@@ -11,25 +11,20 @@ use libmdns::{Responder as MdnsResponder, Service};
 use reqwest::Client;
 use log::{info, debug, error, LevelFilter};
 
-// If you want to use the `hostname` crate to get the system hostname:
-use hostname;
-
 // ------------------ Constants / Defaults ------------------ //
-
-static DEFAULT_SERVER_NAME: &str = "0.0.0.0";
-static DEFAULT_PORT: &str = "8080";
+static DEFAULT_PORT: u16 = 8080;
 static DEFAULT_URL_SCHEME: &str = "http";
-// Appended to ORCHESTRATOR_URL if set
 static URL_BASE_PATH: &str = "/file/device/discovery/register";
+static SUPERVISOR_DEFAULT_NAME: &str = "supervisor";
 
 // ------------------ get_listening_address (Rust version) ------------------ //
 
 /// Equivalent to Python's `get_listening_address(app)`.
 /// We check env variables or use defaults.
 fn get_listening_address() -> (String, u16) {
-    let host = env::var("SERVER_NAME").unwrap_or_else(|_| DEFAULT_SERVER_NAME.to_string());
-    let port_str = env::var("FLASK_PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string());
-    let port: u16 = port_str.parse().unwrap_or(8080);
+    let host = env::var("WASMIOT_SUPERVISOR_IP").expect("Error trying to read enviroment variable WASMIOT_SUPERVISOR_IP");
+    let port_str = env::var("WASMIOT_SUPERVISOR_PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string());
+    let port: u16 = port_str.parse().unwrap_or(DEFAULT_PORT);
     (host, port)
 }
 
@@ -50,14 +45,6 @@ impl WebthingZeroconf {
         // 1) Decide on host/port from environment or defaults
         let (host, port) = get_listening_address();
 
-        // 2) Optionally gather a fallback hostname from the system
-        let fallback_hostname = hostname::get()
-            .map(|osstr| osstr.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "unknown-host".to_string());
-
-        // If SERVER_NAME not set, we could use fallback_hostname
-        let _server_name = env::var("SERVER_NAME").unwrap_or_else(|_| fallback_hostname);
-
         // Check TLS via PREFERRED_URL_SCHEME
         let preferred_url_scheme = env::var("PREFERRED_URL_SCHEME")
             .unwrap_or_else(|_| DEFAULT_URL_SCHEME.to_string());
@@ -73,7 +60,7 @@ impl WebthingZeroconf {
 
         // For the service name, Python used <app.name>._webthing._tcp.local.
         // We can just do something like "<appname>.local." to mimic that:
-        let app_name = env::var("FLASK_APP").unwrap_or_else(|_| "myapp".to_string());
+        let app_name = env::var("SUPERVISOR_NAME").unwrap_or_else(|_| SUPERVISOR_DEFAULT_NAME.to_string());
         let service_name = format!("{}.local.", app_name);
 
         // Some arbitrary key-value properties
@@ -193,7 +180,7 @@ fn wait_until_ready_and_register(mut zc: WebthingZeroconf) {
         }
 
         // If orchestrator is set, do the same POST
-        if let Ok(mut orchestrator_url) = env::var("ORCHESTRATOR_URL") {
+        if let Ok(mut orchestrator_url) = env::var("WASMIOT_ORCHESTRATOR_URL") {
             orchestrator_url.push_str(URL_BASE_PATH);
             let rt = tokio::runtime::Runtime::new().unwrap();
             let result = rt.block_on(async {
@@ -210,17 +197,20 @@ fn wait_until_ready_and_register(mut zc: WebthingZeroconf) {
 
 // ------------------ Actix Handlers ------------------ //
 
+// TODO: Remove this later when no longer needed
 async fn get_test() -> impl Responder {
     HttpResponse::Ok().json(json!({
         "message": "This is a GET response!"
     }))
 }
 
+// TODO: Remove this later when no longer needed
 #[derive(Deserialize)]
 struct PostInput {
     data: String,
 }
 
+// TODO: Remove this later when no longer needed
 async fn post_test(input: web::Json<PostInput>) -> impl Responder {
     HttpResponse::Ok().json(json!({
         "received": input.data.clone()

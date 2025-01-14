@@ -29,14 +29,7 @@
     # Copy the compiled binary from the builder stage
     COPY --from=builder /app/target/release/webapp /app/
     
-    # Expose port 8080 (or whichever your app uses)
-    EXPOSE 8080
-    
-    # If you want to pass environment variables at runtime:
-    # ENV SERVER_NAME=0.0.0.0
-    # ENV FLASK_PORT=8080
-    # ENV ORCHESTRATOR_URL=http://some-service
-    
     # Finally, set the entrypoint or cmd to run the binary
+    # TODO: Change to reflect new folder structure when moving code to actual repository
     CMD ["/app/webapp"]
     

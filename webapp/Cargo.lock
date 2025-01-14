@@ -1958,7 +1958,6 @@ dependencies = [
  "actix-web",
  "anyhow",
  "env_logger",
- "hostname",
  "libmdns",
  "log",
  "reqwest",
