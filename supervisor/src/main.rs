@@ -1,4 +1,4 @@
-use actix_web::{web, get, App, HttpResponse, HttpServer, Responder};
+use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -327,7 +327,7 @@ fn get_device_platform_info() -> Value {
     let cpu_name = cpus[rng.gen_range(0..cpus.len())];
 
     // Random clock speed up to ~3 GHz
-    let clock_speed_hz = rng.gen_range(1_000_000_000..3_000_000_001);
+    let clock_speed_hz = rng.gen_range(1_000_000_000_u64..3_000_000_001_u64);
 
     // Build the JSON
     json!({
@@ -365,20 +365,19 @@ async fn post_test(input: web::Json<PostInput>) -> impl Responder {
     }))
 }
 
-#[get("/.well-known/wasmiot-device-description")]
 async fn wasmiot_device_description() -> impl Responder {
     info!("Device description request served");
     // Return JSON data
     HttpResponse::Ok().json(get_device_description())
 }
 
-#[get("/.well-known/wot-thing-description")]
 async fn thingi_description() -> impl Responder {
     // TODO: get_wot_td returns an error as its not implemented
     HttpResponse::Ok().json(get_wot_td())
 }
 
-#[get("/health")]
+///
+/// 
 async fn thingi_health() -> impl Responder {
     info!("Health check done");
     // Return random CPU usage in JSON
@@ -387,6 +386,13 @@ async fn thingi_health() -> impl Responder {
     HttpResponse::Ok().json(json!({
         "cpuUsage": cpu_usage
     }))
+}
+
+/// Catch-all handler for debug purposes
+async fn default(req: HttpRequest) -> impl Responder {
+    let path = req.path();
+    println!("Handling request for: {}", path);
+    HttpResponse::NotFound()
 }
 
 // ------------------ Main ------------------ //
@@ -403,8 +409,13 @@ async fn main() -> std::io::Result<()> {
     // Start the Actix server
     let server = HttpServer::new(|| {
         App::new()
+            .route("/.well-known/wasmiot-device-description", web::get().to(wasmiot_device_description))
+            .route("/.well-known/wot-thing-description", web::get().to(thingi_description))
+            .route("/health", web::get().to(thingi_health))
+            .route("//health", web::get().to(thingi_health)) // TODO: For some reason the orchestrator has two slashes in the requested address
             .route("/get_test", web::get().to(get_test))
             .route("/post_test", web::post().to(post_test))
+            .default_service(web::route().to(default))
     })
     .bind(("0.0.0.0", port))?;
 

@@ -1592,6 +1592,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
+name = "supervisor"
+version = "0.1.0"
+dependencies = [
+ "actix-web",
+ "anyhow",
+ "env_logger",
+ "libmdns",
+ "log",
+ "rand",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.96"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1949,22 +1965,6 @@ checksum = "33b6dd2ef9186f1f2072e409e99cd22a975331a6b3591b12c764e0e55c60d5d2"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "webapp"
-version = "0.1.0"
-dependencies = [
- "actix-web",
- "anyhow",
- "env_logger",
- "libmdns",
- "log",
- "rand",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

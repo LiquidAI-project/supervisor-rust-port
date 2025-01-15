@@ -1,6 +1,16 @@
 What is SENTRY_DSN?
 
+Is tempconfigs folder necessary?
 
+---- Testing structure: ----
+Simple tests for singular functions where needed. (unit testing)
+Automate orchestrator testing. Two ways:
+    1. Script that sends requests to supervisor, simulating ORCHESTRATOR
+    2. Script that sends requests to orchestrator, simulating USER. This would also be usable for orchestrator porting.
+
+Performance testing to compare python and rust implementations??
+
+Is testcontainers useful?
 
 -- Connecting supervisor to orchestrator --
 
