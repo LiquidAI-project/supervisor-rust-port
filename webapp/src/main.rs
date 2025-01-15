@@ -1,15 +1,19 @@
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{web, get, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use std::env;
 use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 use libmdns::{Responder as MdnsResponder, Service};
 use reqwest::Client;
 use log::{info, debug, error, LevelFilter};
+use rand::{Rng, thread_rng};
 
 // ------------------ Constants / Defaults ------------------ //
 static DEFAULT_PORT: u16 = 8080;
@@ -195,6 +199,150 @@ fn wait_until_ready_and_register(mut zc: WebthingZeroconf) {
     });
 }
 
+
+
+// ------------------ configuration.py translation ----//
+
+/// Returns the absolute path to the instance directory.
+/// By default, uses the current working directory + "/instance".
+fn get_instance_path() -> PathBuf {
+    // Read INSTANCE_PATH from environment.
+    // If not set, fallback to: current_dir()/instance
+    let instance_str = env::var("INSTANCE_PATH")
+        .unwrap_or_else(|_| {
+            let cwd = env::current_dir().expect("Failed to get current working directory");
+            cwd.join("instance").to_string_lossy().to_string()
+        });
+
+    // Convert to an absolute (canonical) path if possible.
+    Path::new(&instance_str)
+        .canonicalize()
+        .unwrap_or_else(|_| {
+            // If canonicalize fails, we just return the raw path as fallback
+            PathBuf::from(&instance_str)
+        })
+}
+
+/// Returns the absolute path to the config directory = <INSTANCE_PATH>/configs.
+fn get_config_dir() -> PathBuf {
+    let instance_path = get_instance_path();
+    instance_path.join("configs")
+}
+
+/// Creates the file if it does not exist, writing `default_obj` as JSON.
+/// Returns the file content as a `String` for further processing.
+fn check_open(path: &Path, default_obj: &Value) -> io::Result<String> {
+    // If the file is missing, create it with default JSON content.
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        // "x" means create and fail if it already exists (so we don't overwrite).
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+        let content = serde_json::to_string_pretty(default_obj)
+            .unwrap_or_else(|_| "{}".to_string());
+        file.write_all(content.as_bytes())?;
+    }
+    // Now read the file to string
+    let file_str = fs::read_to_string(path)?;
+    Ok(file_str)
+}
+
+/// Load `remote_functions.json` from config directory.
+/// If missing, create with an empty object {}.
+pub fn get_remote_functions() -> Value {
+    let config_dir = get_config_dir();
+    let path = config_dir.join("remote_functions.json");
+
+    // If missing, create with empty JSON object
+    let default_json = json!({});
+    let content = check_open(&path, &default_json)
+        .expect("Failed to open or create remote_functions.json");
+    
+    serde_json::from_str(&content)
+        .expect("Failed to parse JSON in remote_functions.json")
+}
+
+/// Load `modules.json` from config directory.
+/// If missing, create with an empty object {}.
+pub fn get_modules() -> Value {
+    let config_dir = get_config_dir();
+    let path = config_dir.join("modules.json");
+
+    let default_json = json!({});
+    let content = check_open(&path, &default_json)
+        .expect("Failed to open or create modules.json");
+    
+    serde_json::from_str(&content)
+        .expect("Failed to parse JSON in modules.json")
+}
+
+/// Must exist or fail by design. Merge random "platform" info into JSON.
+pub fn get_device_description() -> Value {
+    let config_dir = get_config_dir();
+    let path = config_dir.join("wasmiot-device-description.json");
+
+    // Read or fail if missing. 
+    // "Fails by design" means we do NOT create it automatically here.
+    let file_str = fs::read_to_string(&path)
+        .unwrap_or_else(|_| {
+            panic!("Could not open or read {}", path.display())
+        });
+
+    let mut description: Value = serde_json::from_str(&file_str)
+        .unwrap_or_else(|e| {
+            panic!("Error parsing JSON in {}: {}", path.display(), e)
+        });
+
+    // Insert platform info
+    description["platform"] = get_device_platform_info();
+    description
+}
+
+/// Not yet implemented. In Python: `raise NotImplementedError`.
+/// In Rust, you can simply `unimplemented!()` or `todo!()`.
+pub fn get_wot_td() -> Value {
+    unimplemented!("get_wot_td() is not implemented yet")
+}
+
+/// Return a random "platform" info object, mimicking `_get_device_platform_info()`.
+fn get_device_platform_info() -> Value {
+
+    // A simple random approach to emulate memory and CPU info
+    let mut rng = thread_rng();
+
+    // Generate random memory in 4GB increments between 4 and 64
+    let memory_gb_options = [4, 8, 12, 16, 32, 64];
+    let mem_index = rng.gen_range(0..memory_gb_options.len());
+    let memory_gb = memory_gb_options[mem_index];
+    // Convert GB to bytes
+    let memory_bytes = memory_gb as u64 * 1_000_000_000;
+
+    // Random CPU name
+    let cpus = [
+        "12th Gen Intel(R) Core(TM) i7-12700H",
+        "AMD EPYC™ Embedded 7551",
+        "Dual-core Arm Cortex-M0+"
+    ];
+    let cpu_name = cpus[rng.gen_range(0..cpus.len())];
+
+    // Random clock speed up to ~3 GHz
+    let clock_speed_hz = rng.gen_range(1_000_000_000..3_000_000_001);
+
+    // Build the JSON
+    json!({
+        "memory": {
+            "bytes": memory_bytes
+        },
+        "cpu": {
+            "humanReadableName": cpu_name,
+            "clockSpeed": {
+                "Hz": clock_speed_hz
+            }
+        }
+    })
+}
+
 // ------------------ Actix Handlers ------------------ //
 
 // TODO: Remove this later when no longer needed
@@ -214,6 +362,30 @@ struct PostInput {
 async fn post_test(input: web::Json<PostInput>) -> impl Responder {
     HttpResponse::Ok().json(json!({
         "received": input.data.clone()
+    }))
+}
+
+#[get("/.well-known/wasmiot-device-description")]
+async fn wasmiot_device_description() -> impl Responder {
+    info!("Device description request served");
+    // Return JSON data
+    HttpResponse::Ok().json(get_device_description())
+}
+
+#[get("/.well-known/wot-thing-description")]
+async fn thingi_description() -> impl Responder {
+    // TODO: get_wot_td returns an error as its not implemented
+    HttpResponse::Ok().json(get_wot_td())
+}
+
+#[get("/health")]
+async fn thingi_health() -> impl Responder {
+    info!("Health check done");
+    // Return random CPU usage in JSON
+    // TODO: Should actual cpu usage be returned??
+    let cpu_usage = rand::thread_rng().gen_range(0.0..1.0);
+    HttpResponse::Ok().json(json!({
+        "cpuUsage": cpu_usage
     }))
 }
 

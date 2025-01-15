@@ -14,9 +14,20 @@ services:
       WASMIOT_SUPERVISOR_IP: "172.15.0.25"
       WASMIOT_SUPERVISOR_PORT: "8080"
       DEFAULT_URL_SCHEME: "http"
+    volumes:
+      - ./instance/configs:/app/instance/configs
+      - ./instance/modules:/app/instance/modules
+      - ./instance/output:/app/instance/output
     networks:
       default:
         ipv4_address: 172.15.0.25
+    # TODO: Enable later
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+    #   interval: 1m30s
+    #   timeout: 30s
+    #   retries: 3
+    #   start_period: 30s
 
 networks:
   default:
