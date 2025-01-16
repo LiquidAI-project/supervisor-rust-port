@@ -1,76 +1,41 @@
-use std::env;
-use std::fs;
-use std::path::PathBuf;
 use wasmtime::*;
 
-fn main() -> anyhow::Result<()> {
-    // Get the current working directory
-    let current_dir: PathBuf = match env::current_dir() {
-        Ok(path) => path,
-        Err(err) => {
-            eprintln!("Error getting current directory: {}", err);
-            return Ok(()); // Exit the program on error
-        }
-    };
+fn main() -> wasmtime::Result<()> {
+    let engine = Engine::default();
 
-    println!("Current folder: {}", current_dir.display());
+    // Modules can be compiled through either the text or binary format
+    let wat = r#"
+        (module
+            (import "host" "host_func" (func $host_hello (param i32)))
 
-    // Get the list of `.wasm` files in the current directory
-    let wasm_files: Vec<PathBuf> = match fs::read_dir(&current_dir) {
-        Ok(entries) => entries
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension()
-                    .and_then(|ext| ext.to_str())
-                    .map(|ext| ext == "wasm")
-                    .unwrap_or(false)
-            })
-            .collect(),
-        Err(err) => {
-            eprintln!("Error reading current directory: {}", err);
-            return Ok(()); // Exit the program on error
-        }
-    };
+            (func (export "hello")
+                i32.const 3
+                call $host_hello)
+        )
+    "#;
+    let module = Module::new(&engine, wat)?;
 
-    println!("Found WASM files:");
-    for wasm_file in &wasm_files {
-        println!("- {}", wasm_file.display());
-    }
+    // Host functionality can be arbitrary Rust functions and is provided
+    // to guests through a `Linker`.
+    let mut linker = Linker::new(&engine);
+    linker.func_wrap("host", "host_func", |caller: Caller<'_, u32>, param: i32| {
+        println!("Got {} from WebAssembly", param);
+        println!("my host state is: {}", caller.data());
+    })?;
 
-    // Analyze the first `.wasm` file if one exists
-    if let Some(wasm_file) = wasm_files.first() {
-        println!("Analyzing WASM file: {}", wasm_file.display());
+    // All wasm objects operate within the context of a "store". Each
+    // `Store` has a type parameter to store host-specific data, which in
+    // this case we're using `4` for.
+    let mut store: Store<u32> = Store::new(&engine, 4);
 
-        // Create a Wasmtime engine and module
-        let engine = Engine::default();
-        let module = Module::from_file(&engine, wasm_file)?;
+    // Instantiation of a module requires specifying its imports and then
+    // afterwards we can fetch exports by name, as well as asserting the
+    // type signature of the function with `get_typed_func`.
+    let instance = linker.instantiate(&mut store, &module)?;
+    let hello = instance.get_typed_func::<(), ()>(&mut store, "hello")?;
 
-        // Create a store and instantiate the module
-        let mut store = Store::new(&engine, ());
-        let instance = Instance::new(&mut store, &module, &[])?;
-        let exports: Vec<_> = instance.exports(&mut store).collect();
-
-        println!("Available functions in the module:");
-        for export in exports {
-            let export_name = export.name().to_string(); // Capture name before moving
-            println!("{}",export_name);
-            // if let Some(func) = export.into_func() {
-            //     let ty = func.ty(&mut store);
-            //     let params = ty.params().collect::<Vec<_>>();
-            //     let results = ty.results().collect::<Vec<_>>();
-
-            //     println!(
-            //         "- {}: ({:?}) -> ({:?})",
-            //         export_name,
-            //         params,
-            //         results
-            //     );
-            // }
-        }
-    } else {
-        println!("No WASM files found to analyze.");
-    }
+    // And finally we can call the wasm!
+    hello.call(&mut store, ())?;
 
     Ok(())
 }
