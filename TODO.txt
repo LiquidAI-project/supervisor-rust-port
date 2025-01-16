@@ -1,4 +1,5 @@
-What is SENTRY_DSN?
+TEST THE WASM RELATED FILES, especially compare python file/function structure so functionality hasnt been omitted etc
+Camera and sensor rust codes (wasm_utils.rs) need extra checking, not complete probably.
 
 Is tempconfigs folder necessary?
 

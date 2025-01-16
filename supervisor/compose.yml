@@ -12,6 +12,7 @@ services:
       WASMIOT_SUPERVISOR_IP: "172.15.0.25"
       WASMIOT_SUPERVISOR_PORT: "8080"
       DEFAULT_URL_SCHEME: "http"
+      WASM_RUNTIME: "wasmtime"
     volumes:
       - ./instance/configs:/app/instance/configs
       - ./instance/modules:/app/instance/modules
