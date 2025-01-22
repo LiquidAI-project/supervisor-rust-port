@@ -57,6 +57,7 @@ pub fn python_get_humidity() -> f64 {
 
 /// Stub function that would interface with camera code in Rust.
 pub fn capture_image() -> Result<Vec<u8>, String> {
+    // TODO:
     // In Python, we use `cv2.VideoCapture`.
     // In Rust, you'd likely use some crate for camera capture, then return raw bytes or an image struct.
     // We'll just stub here:
@@ -68,6 +69,7 @@ pub fn capture_image() -> Result<Vec<u8>, String> {
 // -------------- RemoteFunction Base -------------- //
 
 pub trait IRemoteFunction {
+    // TODO:
     fn runtime(&self) -> Arc<dyn IWasmRuntime>;
     fn function(&self) -> Box<dyn Fn(Vec<i64>) -> Option<i64> + '_>;
     // This signature is arbitrary for demonstration. In Python code,
