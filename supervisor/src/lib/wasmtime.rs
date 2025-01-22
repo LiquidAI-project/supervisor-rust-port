@@ -1,56 +1,17 @@
+//!
+//! This module contains all functionality related to wasmtime
+//! 
+
 
 use anyhow::Result;
 use wasmtime;
 
-#[cfg(test)]
-mod tests {
-    use super::*; // Bring the parent module scope into the test module
+// ----------------------- Wasmtime related functions etc... ----------------------- //
+// TODO: Divide into classes etc like in python source?
+// TODO: Implement missing functionality
 
-    #[test]
-    fn test_import() -> Result<(), Box<dyn std::error::Error>> {
-        let _ = run_wat_module();
-        let fib_result: i64 = run_fibonacci()?;
-        println!("Fibonacci result: {}", fib_result);
-        Ok(())
-    }
-}
-
-fn run_wat_module() -> Result<()> {
-    // Modules can be compiled through either the text or binary format
-    let engine = wasmtime::Engine::default();
-    let wat = r#"
-        (module
-            (import "host" "host_func" (func $host_hello (param i32)))
-
-            (func (export "hello")
-                i32.const 3
-                call $host_hello)
-        )
-    "#;
-    let module = wasmtime::Module::new(&engine, wat)?;
-
-    // Create a `Linker` which will be later used to instantiate this module.
-    // Host functionality is defined by name within the `Linker`.
-    let mut linker = wasmtime::Linker::new(&engine);
-    linker.func_wrap("host", "host_func", |caller: wasmtime::Caller<'_, u32>, param: i32| {
-        println!("Got {} from WebAssembly", param);
-        println!("my host state is: {}", caller.data());
-    })?;
-
-    // All wasm objects operate within the context of a "store". Each
-    // `Store` has a type parameter to store host-specific data, which in
-    // this case we're using `4` for.
-    let mut store = wasmtime::Store::new(&engine, 4);
-    let instance = linker.instantiate(&mut store, &module)?;
-    let hello = instance.get_typed_func::<(), ()>(&mut store, "hello")?;
-
-    // And finally we can call the wasm!
-    hello.call(&mut store, ())?;
-
-    Ok(())
-}
-
-fn run_fibonacci() -> Result<i64, Box<dyn std::error::Error>> {
+/// Testfunction that runs the fibonacci wasm module
+pub fn run_fibonacci() -> Result<i64, Box<dyn std::error::Error>> {
     let engine: wasmtime::Engine = wasmtime::Engine::default();
     let module:wasmtime::Module  = wasmtime::Module::from_file(&engine, "tests/fibo.wasm")?;
     let linker: wasmtime::Linker<u32> = wasmtime::Linker::new(&engine);
@@ -61,46 +22,61 @@ fn run_fibonacci() -> Result<i64, Box<dyn std::error::Error>> {
     Ok(result)
 }
 
+// ----------------------- Wasmtime Runtime related functionality (check python source) ----------------------- //
 
-// def _get_function(self, function_name: str) -> Optional[Func]:
-// """Get a function from the Wasm module. If the function is not found, return None."""
-// if self.runtime is None:
-//     print("Runtime not set!")
-//     return None
-// if not isinstance(self.runtime, WasmtimeRuntime):
-//     print("Runtime is not Wasmtime!")
-//     return None
-// if self._instance is None:
-//     print("Instance not set!")
-//     return None
+/// Loads a module into the wasmtime runtime
+pub fn load_module() {
+    unimplemented!();
+}
 
-// try:
-//     func = self._instance.exports(self.runtime.store)[function_name]
-//     if isinstance(func, Func):
-//         return func
-//     print(f"'{function_name}' is not a function!")
-//     return None
-// except RuntimeError:
-//     print(f"Function '{function_name}' not found!")
-//     return None
+/// Read from wasmtime runtime memory and return the result
+pub fn read_from_memory() {
+    unimplemented!();
+}
 
+/// Write to wasmtime runtime memory
+pub fn write_to_memory() {
+    unimplemented!();
+}
 
+// Link remote functions to wasmtime runtime for use by wasm modules.
+pub fn link_remote_functions() {
+    unimplemented!();
+}
 
-// def run_function(self, function_name: str, params: List[Any]) -> Any:
-// """Run a function from the Wasm module and return the result."""
-// if not isinstance(self.runtime, WasmtimeRuntime):
-//     return None
+// ----------------------- Wasmtime module related functionality (check python source) ----------------------- //
 
-// # TODO: this approach is used in order to allocate required memory to the correct module
-// # in external functions like take_image. It is not thread safe and can cause problems.
-// self.runtime.current_module_name = self.name
+/// Gets the wasmtime linear memory
+pub fn get_memory() {
+    unimplemented!();
+}
 
-// func = self._get_function(function_name)
-// if func is None:
-//     print(f"Function '{function_name}' not found!")
-//     return None
+/// Gets a function with given name from current wasm module
+pub fn get_function() {
+    unimplemented!();
+}
 
-// print(f"({self.name}) Running function '{function_name}' with params: {params}")
-// if not params:
-//     return func(self.runtime.store)
-// return func(self.runtime.store, *params)
+/// Gets the names of all known functions in current wasm module
+pub fn get_all_functions() {
+    unimplemented!();
+}
+
+/// Gets the argument types of a function in the current wasm module
+pub fn get_arg_types() {
+    unimplemented!();
+}
+
+/// Run a function in the current wasm module with given parameters and return result
+pub fn run_function() {
+    unimplemented!();
+}
+
+/// Loads the current module into the current wasm runtime
+pub fn load_module() {
+    unimplemented!();
+}
+
+/// Links remote functions to current module
+pub fn link_remote_functions() {
+    unimplemented!();
+}
