@@ -1,8 +1,0 @@
-[package]
-name = "wasm-test"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-wasmtime = "28.0.1"
-anyhow = "1.0" # For better error handling

@@ -6,17 +6,17 @@ use supervisor;
 
 #[cfg(test)]
 mod wasmtime_tests {
-    
-    #[test]
-    fn test_import() -> Result<(), Box<dyn std::error::Error>> {
-        let _ = fibonacci_test();
-        Ok(())
-    }
 
+    #[test]
     fn fibonacci_test() -> Result<(), Box<dyn std::error::Error>> {
         let fib_result: i64 = supervisor::lib::wasmtime::run_fibonacci()?;
         println!("Fibonacci result for 5: {}", fib_result);
         Ok(())
+    }
+    
+    #[test]
+    fn test_wasmtime_runtime_instance() {
+        let _ = supervisor::lib::wasmtime::WasmtimeRuntime::new();
     }
 
 }
