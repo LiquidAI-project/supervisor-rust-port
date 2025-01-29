@@ -6,24 +6,9 @@ use std::collections::HashMap;
 use anyhow::Result;
 use wasmtime;
 
-// ----------------------- Wasmtime related functions etc... ----------------------- //
 // TODO: Module serialization, also how necessary is it? (details in https://docs.wasmtime.dev/api/wasmtime/struct.Module.html )
 // TODO: Implement missing functionality
 // TODO: Are both wasmtime and wasm3 needed?
-// TODO: Wtf is going on with life parameters? Doublecheck that they make sense.
-
-/// Testfunction that runs the fibonacci wasm module
-pub fn run_fibonacci() -> Result<i64, Box<dyn std::error::Error>> {
-    let engine: wasmtime::Engine = wasmtime::Engine::default();
-    let module:wasmtime::Module  = wasmtime::Module::from_file(&engine, "tests/fibo.wasm")?;
-    let linker: wasmtime::Linker<u32> = wasmtime::Linker::new(&engine);
-    let mut store: wasmtime::Store<u32> = wasmtime::Store::new(&engine, 4);
-    let instance: wasmtime::Instance = linker.instantiate(&mut store, &module)?;
-    let fibo: wasmtime::TypedFunc<i64, i64> = instance.get_typed_func::<i64, i64>(&mut store, "fibo")?;
-    let result: i64 = fibo.call(&mut store, 5)?;
-    Ok(result)
-}
-
 
 // ----------------------- Wasmtime Runtime related functionality (check python source) ----------------------- //
 
@@ -205,17 +190,17 @@ impl WasmtimeModule {
         unimplemented!();
     }
 
-    pub fn upload_data_file() {
-        unimplemented!();
-    }
+    // pub fn upload_data_file() {
+    //     unimplemented!();
+    // }
 
-    pub fn upload_ml_model() {
-        unimplemented!();
-    }
+    // pub fn upload_ml_model() {
+    //     unimplemented!();
+    // }
 
-    pub fn run_ml_inference() {
-        unimplemented!();
-    }
+    // pub fn run_ml_inference() {
+    //     unimplemented!();
+    // }
 
 }
 
