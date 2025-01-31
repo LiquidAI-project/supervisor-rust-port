@@ -2,15 +2,21 @@
 //! This module contains all functionality related to wasmtime
 //! 
 
+
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::fs;
 use anyhow::Result;
 use wasmtime;
 
+
 // TODO: Module serialization, also how necessary is it? (details in https://docs.wasmtime.dev/api/wasmtime/struct.Module.html )
 // TODO: Implement missing functionality
-// TODO: Are both wasmtime and wasm3 needed?
+// TODO: Serialize every module right after they are received, and also serialize every available module of startup?
 
 // ----------------------- Wasmtime Runtime related functionality (check python source) ----------------------- //
+
+const SERIALIZED_MODULE_POSTFIX: &str = "SERIALIZED.wasm";
 
 pub struct WasmtimeRuntime {
     pub engine: wasmtime::Engine,
@@ -42,26 +48,36 @@ impl WasmtimeRuntime {
         }
     }
 
-
-    // @property
-    // def functions(self) -> Dict[str, WasmModule]:
-    //     """Get the functions loaded in the Wasm runtime and their corresponding modules."""
-    //     if self._functions is None:
-    //         self._functions = {}
-    //         for _, module in self._modules.items():
-    //             for function_name in module.functions:
-    //                 self._functions[function_name] = module
-
-    //     return self._functions
-
-
     pub fn load_module(&mut self, config: ModuleConfig) -> Result<(), Box<dyn std::error::Error>>{
         if !self.modules.contains_key(&config.name){
             let module_name: String = config.name.clone();
-            let module = wasmtime::Module::from_file(&self.engine, config.path.clone())?;
-            let instance = self.linker.instantiate(&mut self.store, &module)?;
+
+            let path_serial = config.path.clone().with_extension(SERIALIZED_MODULE_POSTFIX);
+            let should_compile: bool;
+            if fs::metadata(&path_serial).is_ok() {
+                // Serialized version of the module exists already, check timestamps. If serialized version is older, recompile.
+                let unserialized_module_modified = fs::metadata(&config.path)?.modified()?;
+                let serialized_module_modified = fs::metadata(&path_serial)?.modified()?;
+                should_compile = unserialized_module_modified > serialized_module_modified;
+            } else {
+                // Module should be serialized since the serialized version doesnt exist yet
+                should_compile = true; 
+            }
+            if should_compile {
+                // Compile and save a serialized version of the module
+                let module = wasmtime::Module::from_file(&self.engine, config.path.clone())?;
+                let module_bytes = module.serialize()?;
+                fs::write(&path_serial, module_bytes)?;
+            }
+
+            let deserialized_module = unsafe { 
+                // NOTE: The serialized module file being loaded can be tampered with, which could cause issues, which makes it unsafe.
+                // For more info: https://docs.wasmtime.dev/api/wasmtime/struct.Module.html#method.deserialize_file
+                wasmtime::Module::deserialize_file(&self.engine, &path_serial) 
+            }?;
+            let instance = self.linker.instantiate(&mut self.store, &deserialized_module)?;
             let mut wasmtime_module = WasmtimeModule::new(config)?;
-            wasmtime_module.module = Some(module);
+            wasmtime_module.module = Some(deserialized_module);
             wasmtime_module.instance = Some(instance);
             self.modules.insert(module_name.clone(), wasmtime_module);
             println!("Module {} loaded successfully.", module_name);
@@ -70,7 +86,6 @@ impl WasmtimeRuntime {
         }
         Ok(())
     }
-
 
     /// Read from wasmtime runtime memory and return the result
     pub fn read_from_memory() {
@@ -98,7 +113,7 @@ pub struct WasmtimeModule {
     pub instance: Option<wasmtime::Instance>,
     pub id: String,
     pub name: String,
-    pub path: String,
+    pub path: PathBuf,
     pub functions: Option<Vec<String>>
 }
 
@@ -119,19 +134,8 @@ impl WasmtimeModule {
         Ok(wasmtime_module)
     }
 
-    /// Gets the wasmtime linear memory
-    pub fn get_memory() {
-        unimplemented!();
-    }
-
-    /// Gets a function with given name from current wasm module
-    pub fn get_function() {
-        unimplemented!();
-    }
-
-    /// Gets the names of all known functions in current wasm module
-    pub fn get_all_functions(&self) -> Vec<String> {
-
+    /// Gets the names of all known imported functions from the module
+    pub fn get_all_imports(&self) -> Vec<String> {
         if let Some(module_reference) = &self.module {
             let mut funcs: Vec<String> = vec![];
             let imports = module_reference.imports();
@@ -146,8 +150,34 @@ impl WasmtimeModule {
         }
     }
 
+    /// Gets a list of all known exported functions from the module
+    pub fn get_all_exports(&self) -> Vec<String> {
+        if let Some(module_reference) = &self.module {
+            let mut funcs: Vec<String> = vec![];
+            let imports = module_reference.exports();
+            for import in imports {
+                if import.ty().func().is_some() {
+                    funcs.push(import.name().to_string());
+                }
+            }
+            return funcs;
+        } else {
+            return vec![];
+        }
+    }
+
+    /// Gets a function with given name from current wasm module
+    pub fn get_function() {
+        unimplemented!();
+    }
+
     /// Gets the argument types of a function in the current wasm module
     pub fn get_arg_types() {
+        unimplemented!();
+    }
+
+    /// Gets the wasmtime linear memory
+    pub fn get_memory() {
         unimplemented!();
     }
 
@@ -172,16 +202,6 @@ impl WasmtimeModule {
         unimplemented!();
     }
 
-    // @property
-    // def functions(self) -> List[str]:
-    //     """Get the names of the known functions of the Wasm module."""
-    //     if self._functions is None:
-    //         if self.runtime is None:
-    //             self._functions = []
-    //         else:
-    //             self._functions = self._get_all_functions()
-    //     return self._functions
-
     pub fn run_data_function() {
         unimplemented!();
     }
@@ -190,35 +210,24 @@ impl WasmtimeModule {
         unimplemented!();
     }
 
-    // pub fn upload_data_file() {
-    //     unimplemented!();
-    // }
-
-    // pub fn upload_ml_model() {
-    //     unimplemented!();
-    // }
-
-    // pub fn run_ml_inference() {
-    //     unimplemented!();
-    // }
-
 }
 
 // ----------------------- Miscellaneous module related things ----------------------- //
 
 /// Struct for containing module name, file location and associated files referred to as 'mounts'. 
 /// This is what a module instance for running functions is created based on.
+#[derive(Clone)]
 pub struct ModuleConfig {
     pub id: String,
     pub name: String,
-    pub path: String,
+    pub path: PathBuf,
     pub data_files: HashMap<String, String>,
     pub ml_model: Option<MLModel>,
     pub data_ptr_function_name: String
 }
 
 impl ModuleConfig {
-    pub fn new(id: String, name: String, path: String, data_files: HashMap<String, String>, ml_model: Option<MLModel>) -> Self {
+    pub fn new(id: String, name: String, path: PathBuf, data_files: HashMap<String, String>, ml_model: Option<MLModel>) -> Self {
         ModuleConfig {
             id,
             name,
@@ -241,6 +250,7 @@ impl ModuleConfig {
 }
 
 /// Struct for ML models
+#[derive(Clone)]
 pub struct MLModel {
     pub path: String,
     pub alloc_function_name: String,
