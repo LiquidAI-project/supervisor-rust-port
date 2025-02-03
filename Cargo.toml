@@ -15,9 +15,10 @@ env_logger = "0.9"
 log = "0.4"
 rand = "0.8.5"
 once_cell = "1.17"
-wasmtime = "28.0.1"
+wasmtime = "29.0.1"
 thiserror = "1"
-# opencv = "0.94.1"
+opencv = { version = "0.91.3", features = ["clang-runtime"] }
+wasmtime-wasi = "29.0.1"
 
 # From: https://docs.rs/uuid/latest/uuid/
 [dependencies.uuid]

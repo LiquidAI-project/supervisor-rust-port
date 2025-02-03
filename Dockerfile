@@ -1,5 +1,7 @@
 # Build and compile the supervisor
 FROM rust:1.84-bullseye AS build_stage
+# Below is needed to get opencv working properly. TODO: Can they be removed after cargo build is done? Can some other stuff be removed as well to reduce image size?
+# sudo apt install pkg-config libopencv-dev clang libclang-dev
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src

@@ -20,7 +20,11 @@ mod wasmtime_tests {
     // TODO: This is maybe how runtime should be implemented in supervisor. One runtime, many modules.
     // Get it with let r = RUNTIME.lock().unwrap();, and drop with drop(r);
     static RUNTIME: Lazy<Mutex<WasmtimeRuntime>> = Lazy::new(|| {
-        Mutex::new(WasmtimeRuntime::new())
+        println!("a");
+        match WasmtimeRuntime::new() {
+            Ok(runtime) => Mutex::new(runtime),
+            Err(err) => panic!("Failed to initialize WasmtimeRuntime: {}", err),
+        }
     });
 
     #[test]
@@ -31,7 +35,7 @@ mod wasmtime_tests {
 
         let module_paths: Vec<PathBuf> = vec![
             "camera.wasm",
-            "fibo-wasm",
+            "fibo.wasm",
             "fibobin.wasm",
             "grayscale.wasm",
             "invert_colors.wasm",
@@ -41,6 +45,7 @@ mod wasmtime_tests {
         let mut runtime = RUNTIME.lock().unwrap();
         let mut failures_happened = false;
 
+        // Test that modules load correctly
         for module_path in module_paths {
             let module_name = module_path.file_name().expect("Failed to get the filename of a module").to_string_lossy().to_string();
             let data_files: HashMap<String, String> = HashMap::new();
@@ -69,12 +74,23 @@ mod wasmtime_tests {
             
         }
 
+        // Test getting module exports and imports
+        let mut module_exports: HashMap<String, Vec<String>> = HashMap::new();
         let loaded_module_list = &runtime.modules;
         println!("\n\nList of modules that are currently loaded:\n{:?}\n", loaded_module_list.keys());
         for (name, module) in loaded_module_list.into_iter() {
             let imports = module.get_all_imports();
             let exports = module.get_all_exports();
             println!("\nModule {} has following imports and exports:\nImports:\n{:?}\nExports:\n{:?}\n", name, imports, exports);
+            module_exports.insert(name.clone(), exports);
+        }
+
+        // Test getting function parameter and return types
+        for (name, exports) in module_exports.iter() {
+            for export in exports {
+                let (params, returns) = runtime.get_func_params(name, export);
+                println!("Function '{}' in module '{}' has params: {:?} and returns: {:?}", export, name, params, returns);
+            }
         }
 
         drop(runtime);

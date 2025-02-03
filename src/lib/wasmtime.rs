@@ -7,21 +7,23 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::fs;
 use anyhow::Result;
-use wasmtime;
+use wasmtime::{Config, Engine, Linker, Module, Store, Instance, ValType};
+use wasmtime_wasi::preview1::{self, WasiP1Ctx};
+use wasmtime_wasi::WasiCtxBuilder;
 
 
-// TODO: Module serialization, also how necessary is it? (details in https://docs.wasmtime.dev/api/wasmtime/struct.Module.html )
 // TODO: Implement missing functionality
 // TODO: Serialize every module right after they are received, and also serialize every available module of startup?
+// TODO: Is it possible/necessary to get parameter names for the functions in modules? (check current orchestrator how it displays them during manifest creation)
 
 // ----------------------- Wasmtime Runtime related functionality (check python source) ----------------------- //
 
 const SERIALIZED_MODULE_POSTFIX: &str = "SERIALIZED.wasm";
 
 pub struct WasmtimeRuntime {
-    pub engine: wasmtime::Engine,
-    pub store: wasmtime::Store<()>,
-    pub linker: wasmtime::Linker<()>,
+    pub engine: Engine,
+    pub store: Store<WasiP1Ctx>,
+    pub linker: Linker<WasiP1Ctx>,
     pub modules: HashMap<String, WasmtimeModule>,
     pub functions: Option<HashMap<String, WasmtimeModule>>,
     pub current_module_name: Option<String> // TODO: Does this have any purpose?
@@ -30,28 +32,34 @@ pub struct WasmtimeRuntime {
 impl WasmtimeRuntime {
 
     /// Initializes a new wasmtime runtime
-    pub fn new() -> Self {
-        let config: wasmtime::Config = wasmtime::Config::default();
-        let engine: wasmtime::Engine = wasmtime::Engine::new(&config).unwrap();
-        let store: wasmtime::Store<()> = wasmtime::Store::new(&engine, ());
-        let linker: wasmtime::Linker<()> = wasmtime::Linker::new(&engine);
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let config: Config = Config::default();
+        let engine: Engine = Engine::new(&config).unwrap();
+        let args = std::env::args().skip(1).collect::<Vec<_>>();
+        let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
+        let wasi_ctx = WasiCtxBuilder::new()
+            .inherit_stdio()
+            .inherit_env()
+            .args(&args)
+            .build_p1();
+        let store = Store::new(&engine, wasi_ctx);
+        preview1::add_to_linker_sync(&mut linker, |t| t)?;
         let modules: HashMap<String, WasmtimeModule> = HashMap::new();
         let functions = None; // TODO: What exactly should this be?
         let current_module_name = None;
-        Self {
+        Ok(Self {
             engine,
             store,
             linker,
             modules,
             functions,
             current_module_name
-        }
+        })
     }
 
     pub fn load_module(&mut self, config: ModuleConfig) -> Result<(), Box<dyn std::error::Error>>{
         if !self.modules.contains_key(&config.name){
             let module_name: String = config.name.clone();
-
             let path_serial = config.path.clone().with_extension(SERIALIZED_MODULE_POSTFIX);
             let should_compile: bool;
             if fs::metadata(&path_serial).is_ok() {
@@ -69,7 +77,6 @@ impl WasmtimeRuntime {
                 let module_bytes = module.serialize()?;
                 fs::write(&path_serial, module_bytes)?;
             }
-
             let deserialized_module = unsafe { 
                 // NOTE: The serialized module file being loaded can be tampered with, which could cause issues, which makes it unsafe.
                 // For more info: https://docs.wasmtime.dev/api/wasmtime/struct.Module.html#method.deserialize_file
@@ -102,6 +109,38 @@ impl WasmtimeRuntime {
         // TODO: Use opencv for camera functionality
         unimplemented!();
     }
+
+    /// Gets the function parameters and returns of a given function in a given module
+    pub fn get_func_params(&mut self, module_name: &str, func_name: &str) -> (Vec<ValType>, Vec<ValType>) {
+        let module = match self.modules.get(module_name) {
+            Some(m) => m,
+            None => {
+                eprintln!("Module '{}' not found", module_name);
+                return (vec![], vec![]);
+            }
+        };
+        let instance = match &module.instance {
+            Some(i) => i,
+            None => {
+                eprintln!("Instance for module '{}' not found", module_name);
+                return (vec![], vec![]);
+            }
+        };
+        let func = match instance.get_func(&mut self.store, func_name) {
+            Some(f) => f,
+            None => {
+                eprintln!("Function '{}' not found in module '{}'", func_name, module_name);
+                return (vec![], vec![]);
+            }
+        };
+
+        // Get the function parameters and return types
+        let func_ty = func.ty(&self.store);
+        let param_types: Vec<ValType> = func_ty.params().collect();
+        let return_types: Vec<ValType> = func_ty.results().collect();
+        (param_types, return_types)
+    }
+
 }
 
 
@@ -109,8 +148,8 @@ impl WasmtimeRuntime {
 // ----------------------- Wasmtime module related functionality (check python source) ----------------------- //
 
 pub struct WasmtimeModule {
-    pub module: Option<wasmtime::Module>,
-    pub instance: Option<wasmtime::Instance>,
+    pub module: Option<Module>,
+    pub instance: Option<Instance>,
     pub id: String,
     pub name: String,
     pub path: PathBuf,
