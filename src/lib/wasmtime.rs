@@ -7,18 +7,22 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::fs;
 use anyhow::Result;
-use wasmtime::{Config, Engine, Linker, Module, Store, Instance, ValType};
+use wasmtime::{Config, Engine, Linker, Module, Store, Instance, ValType, FuncType, MemoryAccessError};
 use wasmtime_wasi::preview1::{self, WasiP1Ctx};
 use wasmtime_wasi::WasiCtxBuilder;
+use crate::lib::general_utils;
 
 
 // TODO: Implement missing functionality
 // TODO: Serialize every module right after they are received, and also serialize every available module of startup?
 // TODO: Is it possible/necessary to get parameter names for the functions in modules? (check current orchestrator how it displays them during manifest creation)
+// TODO: Which functions are actually needed in the link_remote_functions
+// TODO: Is the memory always named "memory"?
 
 // ----------------------- Wasmtime Runtime related functionality (check python source) ----------------------- //
 
-const SERIALIZED_MODULE_POSTFIX: &str = "SERIALIZED.wasm";
+const SERIALIZED_MODULE_POSTFIX: &str = "SERIALIZED.wasm"; // Postfix to recognize serialized modules by
+const MEMORY_NAME: &str = "memory"; // Name of the memory related to each module
 
 pub struct WasmtimeRuntime {
     pub engine: Engine,
@@ -47,14 +51,16 @@ impl WasmtimeRuntime {
         let modules: HashMap<String, WasmtimeModule> = HashMap::new();
         let functions = None; // TODO: What exactly should this be?
         let current_module_name = None;
-        Ok(Self {
+        let mut runtime: WasmtimeRuntime = Self {
             engine,
             store,
             linker,
             modules,
             functions,
             current_module_name
-        })
+        };
+        runtime.link_remote_functions();
+        Ok(runtime)
     }
 
     pub fn load_module(&mut self, config: ModuleConfig) -> Result<(), Box<dyn std::error::Error>>{
@@ -94,20 +100,90 @@ impl WasmtimeRuntime {
         Ok(())
     }
 
-    /// Read from wasmtime runtime memory and return the result
-    pub fn read_from_memory() {
-        unimplemented!();
+    /// Read from wasmtime runtime memory and save results to buffer
+    pub fn read_from_memory(&mut self, module_name: &str, offset: usize, buffer: &mut [u8] ) -> Result<(), MemoryAccessError> {
+        // Get the module, if it exists
+        let module = match self.modules.get(module_name) {
+            Some(m) => m,
+            None => {
+                eprintln!("Module '{}' not found", module_name);
+                return Ok(())
+            }
+        };
+        // Get the module instance if it exists
+        let instance = match &module.instance {
+            Some(i) => i,
+            None => {
+                eprintln!("Instance for module '{}' not found", module_name);
+                return Ok(())
+            }
+        };
+        // Get the memory, if it exists for the given instance of the given module
+        let memory = match instance.get_memory(&mut self.store, &MEMORY_NAME) {
+            Some(f) => f,
+            None => {
+                eprintln!("Memory with name {} not found for module '{}'", &MEMORY_NAME, module_name);
+                return Ok(())
+            }
+        };
+        // Attempt to fill the given buffer by reading memory, starting from offset
+        memory.read(&self.store, offset, buffer)?;
+        Ok(())
     }
 
-    /// Write to wasmtime runtime memory
-    pub fn write_to_memory() {
-        unimplemented!();
+
+    /// Write buffer into wasmtime runtime memory
+    pub fn write_to_memory(&mut self, module_name: &str, offset: usize, buffer: &mut [u8] ) -> Result<(), MemoryAccessError> {
+        // Get the module, if it exists
+        let module = match self.modules.get(module_name) {
+            Some(m) => m,
+            None => {
+                eprintln!("Module '{}' not found", module_name);
+                return Ok(())
+            }
+        };
+        // Get the module instance if it exists
+        let instance = match &module.instance {
+            Some(i) => i,
+            None => {
+                eprintln!("Instance for module '{}' not found", module_name);
+                return Ok(())
+            }
+        };
+        // Get the memory, if it exists for the given instance of the given module
+        let memory = match instance.get_memory(&mut self.store, &MEMORY_NAME) {
+            Some(f) => f,
+            None => {
+                eprintln!("Memory with name {} not found for module '{}'", &MEMORY_NAME, module_name);
+                return Ok(())
+            }
+        };
+        // Attempt to write the contents of given buffer into memory, with offset being the starting position
+        memory.write(&mut self.store, offset, buffer)?;
+        Ok(())
     }
 
-    // Link remote functions to wasmtime runtime for use by wasm modules.
-    pub fn link_remote_functions() {
-        // TODO: Use opencv for camera functionality
-        unimplemented!();
+
+    /// Link remote functions to wasmtime runtime for use by wasm modules.
+    pub fn link_remote_functions(&mut self) {
+
+        // Missing: System functions "millis", "delay", "print", "println", "printInt"
+        // Missing: Communication functions "rpcCall"
+        // Missing: Peripheral functions "getTemperature", "getHumidity"
+        
+        let _ = &self.linker.func_new(
+            "camera",
+            "takeImageDynamicSize",
+            FuncType::new(&self.engine, [ValType::I32, ValType::I32], []),
+            general_utils::takeImageDynamicSize,
+        );
+        let _ = &self.linker.func_new(
+            "camera",
+            "takeImageStaticSize",
+            FuncType::new(&self.engine, [ValType::I32, ValType::I32], []),
+            general_utils::takeImageStaticSize,
+        );
+
     }
 
     /// Gets the function parameters and returns of a given function in a given module

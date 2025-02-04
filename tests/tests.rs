@@ -13,6 +13,8 @@ use std::sync::Mutex;
 
 #[cfg(test)]
 mod wasmtime_tests {
+    use std::str;
+
     use super::*;
     const TEST_PATH: &str = "tests/";
 
@@ -76,21 +78,35 @@ mod wasmtime_tests {
 
         // Test getting module exports and imports
         let mut module_exports: HashMap<String, Vec<String>> = HashMap::new();
-        let loaded_module_list = &runtime.modules;
-        println!("\n\nList of modules that are currently loaded:\n{:?}\n", loaded_module_list.keys());
-        for (name, module) in loaded_module_list.into_iter() {
-            let imports = module.get_all_imports();
-            let exports = module.get_all_exports();
-            println!("\nModule {} has following imports and exports:\nImports:\n{:?}\nExports:\n{:?}\n", name, imports, exports);
-            module_exports.insert(name.clone(), exports);
+        let mut module_list: Vec<String> = vec![];
+        {
+            let loaded_module_list = &runtime.modules;
+            println!("\n\nList of modules that are currently loaded:\n{:?}\n", loaded_module_list.keys());
+            for (name, module) in loaded_module_list.into_iter() {
+                let imports = module.get_all_imports();
+                let exports = module.get_all_exports();
+                println!("\n{} has following imports and exports:\nImports:{:?}\nExports:\n{:?}\n", name, imports, exports);
+                module_exports.insert(name.clone(), exports);
+                module_list.push(name.clone());
+            }
+    
         }
 
         // Test getting function parameter and return types
         for (name, exports) in module_exports.iter() {
             for export in exports {
                 let (params, returns) = runtime.get_func_params(name, export);
-                println!("Function '{}' in module '{}' has params: {:?} and returns: {:?}", export, name, params, returns);
+                println!("{}':'{}', params: {:?}, returns: {:?}", export, name, params, returns);
             }
+        }
+
+        // Test reading and writing to module memories
+        for name in module_list {
+            let mut write_buffer: [u8; 10] = *b"tabularasa";
+            runtime.write_to_memory(&name, 0, &mut write_buffer)?;
+            let mut read_buffer: [u8; 10] = [0; 10];
+            runtime.read_from_memory(&name, 0, &mut read_buffer)?;
+            println!("{}: {:?}", name, str::from_utf8(&read_buffer));
         }
 
         drop(runtime);
