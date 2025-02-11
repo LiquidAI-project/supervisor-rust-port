@@ -7,19 +7,21 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::fs;
 use anyhow::Result;
-use wasmtime::{Config, Engine, Linker, Module, Store, Instance, ValType, FuncType, MemoryAccessError};
+use wasmtime::{Config, Engine, Linker, Module, Store, Instance, ValType, FuncType, MemoryAccessError, Func, Memory, Val};
 use wasmtime_wasi::preview1::{self, WasiP1Ctx};
-use wasmtime_wasi::WasiCtxBuilder;
+use wasmtime_wasi::{WasiCtxBuilder, DirPerms, FilePerms};
 use crate::lib::general_utils;
 
 
-// TODO: Implement missing functionality
 // TODO: Serialize every module right after they are received, and also serialize every available module of startup?
 // TODO: Is it possible/necessary to get parameter names for the functions in modules? (check current orchestrator how it displays them during manifest creation)
-// TODO: Which functions are actually needed in the link_remote_functions
 // TODO: Is the memory always named "memory"?
+// TODO: Get the preopened dirs from config or some other smarter place
+// TODO: Are functions like upload_ml_model, upload_data_file, and run_ml_inference needed anymore?
+// TODO: There are no type checks for function parameters, and return types
+// TODO: Function return array is always initialized with zeroes. Depending on the function being ran, that could be confused for correct returns.
 
-// ----------------------- Wasmtime Runtime related functionality (check python source) ----------------------- //
+// ----------------------- Wasmtime Runtime related functionality ----------------------- //
 
 const SERIALIZED_MODULE_POSTFIX: &str = "SERIALIZED.wasm"; // Postfix to recognize serialized modules by
 const MEMORY_NAME: &str = "memory"; // Name of the memory related to each module
@@ -30,10 +32,11 @@ pub struct WasmtimeRuntime {
     pub linker: Linker<WasiP1Ctx>,
     pub modules: HashMap<String, WasmtimeModule>,
     pub functions: Option<HashMap<String, WasmtimeModule>>,
-    pub current_module_name: Option<String> // TODO: Does this have any purpose?
 }
 
+
 impl WasmtimeRuntime {
+
 
     /// Initializes a new wasmtime runtime
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
@@ -41,27 +44,30 @@ impl WasmtimeRuntime {
         let engine: Engine = Engine::new(&config).unwrap();
         let args = std::env::args().skip(1).collect::<Vec<_>>();
         let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
-        let wasi_ctx = WasiCtxBuilder::new()
-            .inherit_stdio()
-            .inherit_env()
-            .args(&args)
-            .build_p1();
-        let store = Store::new(&engine, wasi_ctx);
+        let mut wasi_ctx = WasiCtxBuilder::new();
+        wasi_ctx.inherit_stdio();
+        wasi_ctx.inherit_env();
+        wasi_ctx.args(&args);
+        let preopened_dirs = [("./tests", ".")];
+        for (source, target) in preopened_dirs {
+            wasi_ctx.preopened_dir(&source, &target, DirPerms::all(), FilePerms::all())?;
+        }
+        let wasi_p1 = wasi_ctx.build_p1();
+        let store = Store::new(&engine, wasi_p1);
         preview1::add_to_linker_sync(&mut linker, |t| t)?;
         let modules: HashMap<String, WasmtimeModule> = HashMap::new();
         let functions = None; // TODO: What exactly should this be?
-        let current_module_name = None;
         let mut runtime: WasmtimeRuntime = Self {
             engine,
             store,
             linker,
             modules,
-            functions,
-            current_module_name
+            functions
         };
         runtime.link_remote_functions();
         Ok(runtime)
     }
+
 
     pub fn load_module(&mut self, config: ModuleConfig) -> Result<(), Box<dyn std::error::Error>>{
         if !self.modules.contains_key(&config.name){
@@ -93,83 +99,65 @@ impl WasmtimeRuntime {
             wasmtime_module.module = Some(deserialized_module);
             wasmtime_module.instance = Some(instance);
             self.modules.insert(module_name.clone(), wasmtime_module);
-            println!("Module {} loaded successfully.", module_name);
         } else {
             println!("Module {} is already loaded.", &config.name);
         }
         Ok(())
     }
 
-    /// Read from wasmtime runtime memory and save results to buffer
+
+    /// Read from wasmtime default runtime memory and save results to buffer
     pub fn read_from_memory(&mut self, module_name: &str, offset: usize, buffer: &mut [u8] ) -> Result<(), MemoryAccessError> {
-        // Get the module, if it exists
-        let module = match self.modules.get(module_name) {
-            Some(m) => m,
-            None => {
-                eprintln!("Module '{}' not found", module_name);
-                return Ok(())
-            }
-        };
-        // Get the module instance if it exists
-        let instance = match &module.instance {
-            Some(i) => i,
-            None => {
-                eprintln!("Instance for module '{}' not found", module_name);
-                return Ok(())
-            }
-        };
-        // Get the memory, if it exists for the given instance of the given module
-        let memory = match instance.get_memory(&mut self.store, &MEMORY_NAME) {
-            Some(f) => f,
-            None => {
-                eprintln!("Memory with name {} not found for module '{}'", &MEMORY_NAME, module_name);
-                return Ok(())
-            }
-        };
         // Attempt to fill the given buffer by reading memory, starting from offset
-        memory.read(&self.store, offset, buffer)?;
+        let _ = match self.get_memory(module_name, MEMORY_NAME) {
+            Some(memory) => memory.read(&self.store, offset, buffer)?,
+            None => eprintln!("Failed to read from module {} memory!", module_name)
+        };
         Ok(())
     }
 
 
-    /// Write buffer into wasmtime runtime memory
-    pub fn write_to_memory(&mut self, module_name: &str, offset: usize, buffer: &mut [u8] ) -> Result<(), MemoryAccessError> {
-        // Get the module, if it exists
-        let module = match self.modules.get(module_name) {
-            Some(m) => m,
+    /// Write buffer into default wasmtime runtime memory
+    pub fn write_to_memory(&mut self, module_name: &str, offset: usize, buffer: &mut [u8]) -> Result<(), MemoryAccessError> {
+        // Attempt to write the contents of given buffer into memory, with offset being the starting position
+        let _ = match self.get_memory(module_name, MEMORY_NAME) {
+            Some(memory) => memory.write(&mut self.store, offset, buffer)?,
+            None => eprintln!("Failed to write into module {} memory!", module_name)
+        };
+        Ok(())
+    }
+
+
+    /// Get a module from the list of modules in this runtime, if it exists there
+    pub fn get_module(&self, module_name: &str) -> Option<&WasmtimeModule> {
+        let _ = match self.modules.get(module_name) {
+            Some(m) => return Some(m),
             None => {
                 eprintln!("Module '{}' not found", module_name);
-                return Ok(())
+                return None
             }
         };
-        // Get the module instance if it exists
-        let instance = match &module.instance {
-            Some(i) => i,
+    }
+
+
+    /// Get the instance of a module, if the module is loaded in the runtime and has an instance there
+    pub fn get_instance(&self, module_name: &str) -> Option<Instance> {
+        let _ = match self.get_module(module_name) {
+            Some(m) => return m.instance,
             None => {
                 eprintln!("Instance for module '{}' not found", module_name);
-                return Ok(())
+                return None;
             }
         };
-        // Get the memory, if it exists for the given instance of the given module
-        let memory = match instance.get_memory(&mut self.store, &MEMORY_NAME) {
-            Some(f) => f,
-            None => {
-                eprintln!("Memory with name {} not found for module '{}'", &MEMORY_NAME, module_name);
-                return Ok(())
-            }
-        };
-        // Attempt to write the contents of given buffer into memory, with offset being the starting position
-        memory.write(&mut self.store, offset, buffer)?;
-        Ok(())
     }
 
 
     /// Link remote functions to wasmtime runtime for use by wasm modules.
     pub fn link_remote_functions(&mut self) {
 
-        // Missing: System functions "millis", "delay", "print", "println", "printInt"
-        // Missing: Communication functions "rpcCall"
-        // Missing: Peripheral functions "getTemperature", "getHumidity"
+        // NOTE: Missing: System functions "millis", "delay", "print", "println", "printInt"
+        // NOTE: Missing: Communication functions "rpcCall"
+        // NOTE: Missing: Peripheral functions "getTemperature", "getHumidity"
         
         let _ = &self.linker.func_new(
             "camera",
@@ -186,42 +174,92 @@ impl WasmtimeRuntime {
 
     }
 
+
     /// Gets the function parameters and returns of a given function in a given module
     pub fn get_func_params(&mut self, module_name: &str, func_name: &str) -> (Vec<ValType>, Vec<ValType>) {
-        let module = match self.modules.get(module_name) {
-            Some(m) => m,
-            None => {
-                eprintln!("Module '{}' not found", module_name);
-                return (vec![], vec![]);
-            }
-        };
-        let instance = match &module.instance {
-            Some(i) => i,
-            None => {
-                eprintln!("Instance for module '{}' not found", module_name);
-                return (vec![], vec![]);
-            }
-        };
-        let func = match instance.get_func(&mut self.store, func_name) {
-            Some(f) => f,
+        let func = self.get_function(&module_name, &func_name);
+        match func {
+            Some(f) => {
+                let func_ty = f.ty(&self.store);
+                let param_types: Vec<ValType> = func_ty.params().collect();
+                let return_types: Vec<ValType> = func_ty.results().collect();
+                return (param_types, return_types)
+            },
+            None => return (vec![], vec![])
+        }
+    }
+
+
+    /// Gets a function with given name from current wasm module
+    pub fn get_function(&mut self, module_name: &str, func_name: &str) -> Option<Func>{
+        let _ = match self.get_instance(module_name) {
+            Some(i) => return i.get_func(&mut self.store, func_name),
             None => {
                 eprintln!("Function '{}' not found in module '{}'", func_name, module_name);
-                return (vec![], vec![]);
+                return None
             }
         };
+    }
 
-        // Get the function parameters and return types
-        let func_ty = func.ty(&self.store);
-        let param_types: Vec<ValType> = func_ty.params().collect();
-        let return_types: Vec<ValType> = func_ty.results().collect();
-        (param_types, return_types)
+
+    /// Gets the argument types of a function in the current wasm module
+    pub fn get_arg_types(&mut self, module_name: &str, func_name: &str) -> Vec<ValType> {
+        let (params, _) = self.get_func_params(module_name, func_name);
+        return params;
+    }
+
+
+    /// Gets the return types of a function in the current wasm module
+    pub fn get_return_types(&mut self, module_name: &str, func_name: &str) -> Vec<ValType> {
+        let (_, returns) = self.get_func_params(module_name, func_name);
+        return returns;
+    }
+
+
+    /// Gets the wasmtime linear memory
+    pub fn get_memory(&mut self, module_name: &str, memory_name: &str) -> Option<Memory> {
+        let _ = match self.get_instance(module_name) {
+            Some(i) => return i.get_export(&mut self.store, memory_name).unwrap().into_memory(),
+            None => return None
+        };
+    }
+
+
+    /// Run a function in the current wasm module with given parameters and return a given number of results
+    pub fn run_function(&mut self, module_name: &str, func_name: &str, params: Vec<Val>, returns: usize) -> Vec<Val>{
+        let params_thingy: &[Val] = &params;
+        let returns_thingy: &mut[Val] = &mut vec![Val::I32(0); returns];
+        println!("Attempting to run function {} from module {}...", module_name, func_name);
+        let _ = match &self.get_function(module_name, func_name) {
+            Some(func) => {
+                func.call(&mut self.store, params_thingy, returns_thingy)
+            }
+            None => {
+                eprintln!("Failed to run function {} from module {}.", module_name, func_name);
+                Ok(())
+            }
+        };
+        return returns_thingy.to_vec();
+    }
+
+
+    /// Get the names of known functions in the given wasm module
+    pub fn functions(&self, module_name: &str) -> Vec<String> {
+        let _ = match self.get_module(module_name) {
+            Some(module) => {
+                return module.get_all_exports();
+            }
+            None => {
+                eprintln!("Failed to get list of functions for module {}.", module_name);
+                return vec![]
+            }
+        };
     }
 
 }
 
 
-
-// ----------------------- Wasmtime module related functionality (check python source) ----------------------- //
+// ----------------------- Wasmtime module related functionality ----------------------- //
 
 pub struct WasmtimeModule {
     pub module: Option<Module>,
@@ -232,7 +270,9 @@ pub struct WasmtimeModule {
     pub functions: Option<Vec<String>>
 }
 
+
 impl WasmtimeModule {
+
 
     pub fn new(config: ModuleConfig) -> Result<Self, Box<dyn std::error::Error>> {
         let module = None;
@@ -248,6 +288,7 @@ impl WasmtimeModule {
         };
         Ok(wasmtime_module)
     }
+
 
     /// Gets the names of all known imported functions from the module
     pub fn get_all_imports(&self) -> Vec<String> {
@@ -265,6 +306,7 @@ impl WasmtimeModule {
         }
     }
 
+
     /// Gets a list of all known exported functions from the module
     pub fn get_all_exports(&self) -> Vec<String> {
         if let Some(module_reference) = &self.module {
@@ -280,51 +322,6 @@ impl WasmtimeModule {
             return vec![];
         }
     }
-
-    /// Gets a function with given name from current wasm module
-    pub fn get_function() {
-        unimplemented!();
-    }
-
-    /// Gets the argument types of a function in the current wasm module
-    pub fn get_arg_types() {
-        unimplemented!();
-    }
-
-    /// Gets the wasmtime linear memory
-    pub fn get_memory() {
-        unimplemented!();
-    }
-
-    /// Run a function in the current wasm module with given parameters and return result
-    pub fn run_function() {
-        // let engine: wasmtime::Engine = wasmtime::Engine::default();
-        // let module:wasmtime::Module  = wasmtime::Module::from_file(&engine, "tests/fibo.wasm")?;
-        // let linker: wasmtime::Linker<u32> = wasmtime::Linker::new(&engine);
-        // let mut store: wasmtime::Store<u32> = wasmtime::Store::new(&engine, 4);
-        // let instance: wasmtime::Instance = linker.instantiate(&mut store, &module)?;
-        // let fibo: wasmtime::TypedFunc<i64, i64> = instance.get_typed_func::<i64, i64>(&mut store, "fibo")?;
-        // let result: i64 = fibo.call(&mut store, 5)?;
-        unimplemented!();
-    }
-
-    /// Links remote functions to current module
-    pub fn link_remote_functions() {
-        unimplemented!();
-    }
-
-    pub fn functions() {
-        unimplemented!();
-    }
-
-    pub fn run_data_function() {
-        unimplemented!();
-    }
-
-    pub fn upload_data() {
-        unimplemented!();
-    }
-
 }
 
 // ----------------------- Miscellaneous module related things ----------------------- //
@@ -341,6 +338,7 @@ pub struct ModuleConfig {
     pub data_ptr_function_name: String
 }
 
+
 impl ModuleConfig {
     pub fn new(id: String, name: String, path: PathBuf, data_files: HashMap<String, String>, ml_model: Option<MLModel>) -> Self {
         ModuleConfig {
@@ -353,6 +351,7 @@ impl ModuleConfig {
         }
     }
 
+
     pub fn set_model_from_data_files(&mut self, key: Option<String>) {
         let mut model_name: String = "model.pb".to_string();
         match key {
@@ -361,7 +360,6 @@ impl ModuleConfig {
         }
         self.ml_model = Some(MLModel::new(model_name));
     }
-
 }
 
 /// Struct for ML models
@@ -371,6 +369,7 @@ pub struct MLModel {
     pub alloc_function_name: String,
     pub infer_function_name: String
 }
+
 
 impl MLModel {
     pub fn new(path: String) -> Self {

@@ -15,6 +15,8 @@ use reqwest::Client;
 use log::{info, debug, error, LevelFilter};
 use rand::{Rng, thread_rng};
 
+// TODO: Change healthcheck processor usage to not be random anymore
+
 // ------------------ Constants / Defaults ------------------ //
 static DEFAULT_PORT: u16 = 8080;
 static DEFAULT_URL_SCHEME: &str = "http";
