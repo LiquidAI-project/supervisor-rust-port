@@ -1,4 +1,8 @@
 pub mod lib {
     pub mod wasmtime;
-    pub mod general_utils;
+    pub mod wasmtime_imports;
+    pub mod zeroconf;
+    pub mod api;
+    pub mod constants;
+    pub mod configuration;
 }

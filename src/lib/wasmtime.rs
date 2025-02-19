@@ -10,7 +10,7 @@ use anyhow::Result;
 use wasmtime::{Config, Engine, Linker, Module, Store, Instance, ValType, FuncType, MemoryAccessError, Func, Memory, Val};
 use wasmtime_wasi::preview1::{self, WasiP1Ctx};
 use wasmtime_wasi::{WasiCtxBuilder, DirPerms, FilePerms};
-use crate::lib::general_utils;
+use crate::lib::wasmtime_imports;
 
 
 // TODO: Serialize every module right after they are received, and also serialize every available module of startup?
@@ -163,13 +163,13 @@ impl WasmtimeRuntime {
             "camera",
             "takeImageDynamicSize",
             FuncType::new(&self.engine, [ValType::I32, ValType::I32], []),
-            general_utils::takeImageDynamicSize,
+            wasmtime_imports::takeImageDynamicSize,
         );
         let _ = &self.linker.func_new(
             "camera",
             "takeImageStaticSize",
             FuncType::new(&self.engine, [ValType::I32, ValType::I32], []),
-            general_utils::takeImageStaticSize,
+            wasmtime_imports::takeImageStaticSize,
         );
 
     }
