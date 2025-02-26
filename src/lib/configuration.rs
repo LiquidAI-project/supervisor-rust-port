@@ -3,8 +3,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use sysinfo::System;
-
+use sysinfo::{System, Networks};
 use crate::lib::constants::SUPERVISOR_INTERFACES;
 
 
@@ -91,9 +90,19 @@ pub fn get_device_description() -> Value {
     description
 }
 
-/// TODO: Whatever this is
+/// Returns the web-of-things description (device-description.json)
 pub fn get_wot_td() -> Value {
-    unimplemented!("get_wot_td() is not implemented yet")
+    let config_dir = get_config_dir();
+    let path = config_dir.join("device-description.json");
+    let file_str = fs::read_to_string(&path)
+        .unwrap_or_else(|_| {
+            panic!("Could not open or read {}", path.display())
+        });
+    let description: Value = serde_json::from_str(&file_str)
+        .unwrap_or_else(|e| {
+            panic!("Error parsing JSON in {}: {}", path.display(), e)
+        });
+    description
 }
 
 /// Get information on current platform
@@ -103,7 +112,33 @@ pub fn get_device_platform_info() -> Value {
     let memory_bytes = sys.total_memory();
     let cpu_name = sys.cpus()[0].brand().to_string();
     let clock_speed_hz = sys.cpus()[0].frequency() as u64 * 1_000_000;
+    let core_count = sys.cpus().len();
+    let system_name = System::name();
+    let system_kernel = System::kernel_version();
+    let system_os = System::os_version();
+    let system_host = System::host_name();
+    let networks = Networks::new_with_refreshed_list();
+    let network_data: Value = networks.iter()
+        .map(|(interface_name, data)| {
+            (
+                interface_name.clone(),
+                json!({
+                    "ipInfo": data.ip_networks()
+                        .iter()
+                        .map(|ip| ip.to_string())
+                        .collect::<Vec<String>>()
+                }),
+            )
+        })
+        .collect();
+
     json!({
+        "system": {
+            "name": system_name,
+            "kernel": system_kernel,
+            "os": system_os,
+            "hostName": system_host
+        },
         "memory": {
             "bytes": memory_bytes
         },
@@ -111,7 +146,9 @@ pub fn get_device_platform_info() -> Value {
             "humanReadableName": cpu_name,
             "clockSpeed": {
                 "Hz": clock_speed_hz
-            }
-        }
+            },
+            "coreCount": core_count
+        },
+        "network": network_data
     })
 }

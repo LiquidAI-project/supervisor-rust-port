@@ -5,4 +5,5 @@ pub mod lib {
     pub mod api;
     pub mod constants;
     pub mod configuration;
+    pub mod logging;
 }

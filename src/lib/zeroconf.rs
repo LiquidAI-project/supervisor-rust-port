@@ -5,7 +5,8 @@ use std::thread;
 use std::time::Duration;
 use libmdns::{Responder as MdnsResponder, Service};
 use reqwest::Client;
-use log::{info, debug, error};
+use log::{info, error, debug};
+use local_ip_address;
 
 use crate::lib::constants::{
     DEFAULT_URL_SCHEME, 
@@ -150,7 +151,12 @@ pub fn wait_until_ready_and_register(mut zc: WebthingZeroconf) {
 
 /// Check env variables or use defaults.
 pub fn get_listening_address() -> (String, u16) {
-    let host = env::var("WASMIOT_SUPERVISOR_IP").expect("Error trying to read enviroment variable WASMIOT_SUPERVISOR_IP");
+    // let host = env::var("WASMIOT_SUPERVISOR_IP").expect("Error trying to read enviroment variable WASMIOT_SUPERVISOR_IP");
+    let host = env::var("WASMIOT_SUPERVISOR_IP").unwrap_or_else(|_| {
+        local_ip_address::local_ip()
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|_| "127.0.0.1".to_string())
+    });
     let port_str = env::var("WASMIOT_SUPERVISOR_PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string());
     let port: u16 = port_str.parse().unwrap_or(DEFAULT_PORT);
     (host, port)

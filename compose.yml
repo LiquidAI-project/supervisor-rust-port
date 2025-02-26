@@ -1,5 +1,6 @@
 services:
   supervisor:
+    tty: true # Makes log level colors visible
     build: .
     container_name: rust_supervisor
     ports:

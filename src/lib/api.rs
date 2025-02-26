@@ -1,44 +1,131 @@
-use actix_web::{web, HttpResponse, Responder};
-use sysinfo::System;
-use log::info;
-use serde_json::json;
 
+use actix_web::{web, HttpResponse, Responder};
+use sysinfo::{System, Networks};
+use serde_json::{json, Value};
+use log::info;
+use chrono::Utc;
+use std::collections::HashMap;
+use sha2::{Sha256, Digest};
+use hex;
 use crate::lib::configuration::{get_wot_td, get_device_description};
+use crate::lib::logging::send_log;
+use crate::function_name;
 
 
 // TODO: Check the configure_routes function so that endpoint methods are correct
 // TODO: Implement missing functionality
+// TODO: Figure out what the FetchFailures should actually contain
+
+
+// Struct for containing failed attempts to fetch modules or their related files
+pub struct FetchFailures {
+    pub errors: Vec<Value>,
+}
+
+/// Struct for containing requests made to supervisor
+#[derive(Debug)]
+pub struct RequestEntry {
+    pub request_id: String,
+    pub deployment_id: String,
+    pub module_name: String,
+    pub function_name: String,
+    pub method: String,
+    pub request_args: Value,
+    pub request_files: HashMap<String, String>,
+    pub work_queued_at: Utc,
+    pub result: Option<Value>,
+    pub success: bool,
+}
+
+impl RequestEntry {
+
+    pub fn new(
+        deployment_id: String,
+        module_name: String,
+        function_name: String,
+        method: String,
+        request_args: Value,
+        request_files: HashMap<String, String>,
+        work_queued_at: Utc,
+    ) -> Self {
+        let mut entry = RequestEntry {
+            request_id: String::new(),
+            deployment_id,
+            module_name,
+            function_name,
+            method,
+            request_args,
+            request_files,
+            work_queued_at,
+            result: None,
+            success: false,
+        };
+        entry.init_request_id();
+        entry
+    }
+
+    /// Gives a hashed id for a request based on its details and the exact current time (down to milliseconds)
+    fn init_request_id(&mut self) {
+        let key = format!("{}:{}:{}", self.deployment_id, self.module_name, self.function_name);
+        let time = Utc::now().to_rfc3339();
+        let input_string = format!("{}:{}", key, time);
+        let mut hasher = Sha256::new();
+        hasher.update(input_string.as_bytes());
+        let hash_bytes = hasher.finalize();
+        let hash_hex = hex::encode(hash_bytes);
+        self.request_id = hash_hex;
+    }
+
+}
 
 
 /// Returns the device description
 pub async fn wasmiot_device_description() -> impl Responder {
     info!("Device description request served");
     // Return JSON data
+    info!("Wasmiot device description served");
+    send_log("info", "Device description request served", function_name!()).await;
     HttpResponse::Ok().json(get_device_description())
 }
 
 /// Returns the device web-of-things description
 pub async fn thingi_description() -> impl Responder {
+    info!("Web of things description served.");
+    send_log("info", "Web of Things description request served", function_name!()).await;
     HttpResponse::Ok().json(get_wot_td())
 }
 
 /// Return health status, contains global cpu usage and memory usage at the moment.
 pub async fn thingi_health() -> impl Responder {
     info!("Health check done");
+    send_log("info", "Health check done", function_name!()).await;
     let mut sys = System::new_all();
     sys.refresh_all();
-    // sys.refresh_cpu_usage();
-    // std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
-    // sys.refresh_cpu_usage();
-    // let cpu_usages: Vec<String> = sys.cpus()
-    //     .iter()
-    //     .map(|cpu| format!("{:.1}", cpu.cpu_usage()))
-    //     .collect();
-    let cpu_usage = format!("{:.1}%", sys.global_cpu_usage());
-    let memory_usage = format!("{:.1}%", sys.used_memory() / sys.total_memory() * 100);
+    let cpu_usage = sys.global_cpu_usage();
+    let memory_usage = sys.used_memory() / sys.total_memory();
+    let networks = Networks::new_with_refreshed_list();
+    let network_usage: Value = networks.iter()
+    .filter_map(|(interface_name, data)| {
+        let down_bytes = data.total_received();
+        let up_bytes = data.total_transmitted();
+        if down_bytes > 0 || up_bytes > 0 {
+            Some((
+                interface_name.clone(),
+                json!({
+                    "downBytes": down_bytes,
+                    "upBytes": up_bytes,
+                }),
+            ))
+        } else {
+            None
+        }
+    })
+    .collect();
+
     HttpResponse::Ok().json(json!({
         "cpuUsage": cpu_usage,
-        "memoryUsage": memory_usage
+        "memoryUsage": memory_usage,
+        "networkUsage": network_usage
     }))
 }
 

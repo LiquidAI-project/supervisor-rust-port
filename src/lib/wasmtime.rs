@@ -10,6 +10,7 @@ use anyhow::Result;
 use wasmtime::{Config, Engine, Linker, Module, Store, Instance, ValType, FuncType, MemoryAccessError, Func, Memory, Val};
 use wasmtime_wasi::preview1::{self, WasiP1Ctx};
 use wasmtime_wasi::{WasiCtxBuilder, DirPerms, FilePerms};
+use log::{info, error};
 use crate::lib::wasmtime_imports;
 
 
@@ -100,7 +101,7 @@ impl WasmtimeRuntime {
             wasmtime_module.instance = Some(instance);
             self.modules.insert(module_name.clone(), wasmtime_module);
         } else {
-            println!("Module {} is already loaded.", &config.name);
+            info!("Module {} is already loaded.", &config.name);
         }
         Ok(())
     }
@@ -111,7 +112,7 @@ impl WasmtimeRuntime {
         // Attempt to fill the given buffer by reading memory, starting from offset
         let _ = match self.get_memory(module_name, MEMORY_NAME) {
             Some(memory) => memory.read(&self.store, offset, buffer)?,
-            None => eprintln!("Failed to read from module {} memory!", module_name)
+            None => error!("Failed to read from module {} memory!", module_name)
         };
         Ok(())
     }
@@ -122,7 +123,7 @@ impl WasmtimeRuntime {
         // Attempt to write the contents of given buffer into memory, with offset being the starting position
         let _ = match self.get_memory(module_name, MEMORY_NAME) {
             Some(memory) => memory.write(&mut self.store, offset, buffer)?,
-            None => eprintln!("Failed to write into module {} memory!", module_name)
+            None => error!("Failed to write into module {} memory!", module_name)
         };
         Ok(())
     }
@@ -133,7 +134,7 @@ impl WasmtimeRuntime {
         let _ = match self.modules.get(module_name) {
             Some(m) => return Some(m),
             None => {
-                eprintln!("Module '{}' not found", module_name);
+                error!("Module '{}' not found", module_name);
                 return None
             }
         };
@@ -145,7 +146,7 @@ impl WasmtimeRuntime {
         let _ = match self.get_module(module_name) {
             Some(m) => return m.instance,
             None => {
-                eprintln!("Instance for module '{}' not found", module_name);
+                error!("Instance for module '{}' not found", module_name);
                 return None;
             }
         };
@@ -195,7 +196,7 @@ impl WasmtimeRuntime {
         let _ = match self.get_instance(module_name) {
             Some(i) => return i.get_func(&mut self.store, func_name),
             None => {
-                eprintln!("Function '{}' not found in module '{}'", func_name, module_name);
+                error!("Function '{}' not found in module '{}'", func_name, module_name);
                 return None
             }
         };
@@ -229,13 +230,13 @@ impl WasmtimeRuntime {
     pub fn run_function(&mut self, module_name: &str, func_name: &str, params: Vec<Val>, returns: usize) -> Vec<Val>{
         let params_thingy: &[Val] = &params;
         let returns_thingy: &mut[Val] = &mut vec![Val::I32(0); returns];
-        println!("Attempting to run function {} from module {}...", module_name, func_name);
+        info!("Attempting to run function {} from module {}...", module_name, func_name);
         let _ = match &self.get_function(module_name, func_name) {
             Some(func) => {
                 func.call(&mut self.store, params_thingy, returns_thingy)
             }
             None => {
-                eprintln!("Failed to run function {} from module {}.", module_name, func_name);
+                error!("Failed to run function {} from module {}.", module_name, func_name);
                 Ok(())
             }
         };
@@ -250,7 +251,7 @@ impl WasmtimeRuntime {
                 return module.get_all_exports();
             }
             None => {
-                eprintln!("Failed to get list of functions for module {}.", module_name);
+                error!("Failed to get list of functions for module {}.", module_name);
                 return vec![]
             }
         };

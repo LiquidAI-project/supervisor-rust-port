@@ -3,8 +3,9 @@
 //! Can also be used to test the orchestrator itself
 
 use reqwest::Client;
-use serde_json::Value;
+use serde_json;
 use tokio;
+use log::debug;
 
 // TODO: Fix/add tests for deploying manifests and executing them
 // TODO: Add tests for creating a module description (or was that handled by orchestrator)
@@ -25,8 +26,6 @@ mod orchestrator_tests {
     // ------------------------- Constants and helper functions -------------------------//
 
 
-
-    const TEST_PATH: &str = "tests/";
     const ORCHESTRATOR_URL: &str = "http://localhost:3000";
 
     // Set to false to get full stacktrace from tests
@@ -37,9 +36,9 @@ mod orchestrator_tests {
         let status = response.status();
         let body = response.text().await.unwrap_or_else(|_| "Failed to read body".to_string());
 
-        println!("Test: {}", endpoint);
-        println!("Status Code: {}", status);
-        println!("Response Body: {}", body);
+        debug!("Test: {}", endpoint);
+        debug!("Status Code: {}", status);
+        debug!("Response Body: {}", body);
     }
 
     
