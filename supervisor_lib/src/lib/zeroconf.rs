@@ -1,13 +1,24 @@
+//! # zeroconf.rs
+//!
+//! This module handles zero-configuration networking for the Wasm supervisor service.
+//!
+//! It is responsible for:
+//! - Determining the local host and port the supervisor is running on
+//! - Building and managing a service identity (`WebthingZeroconf`)
+//! - Registering that service with a remote orchestrator, if configured
+//!
+//! This allows services to self-register into the orchestrator.
+
+
 use serde::Serialize;
 use std::env;
 use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
-use libmdns::{Responder as MdnsResponder, Service};
 use reqwest::Client;
-use log::{info, error, debug};
+use log::{error, debug};
 use local_ip_address;
-
+use actix_web::rt::System;
 use crate::lib::constants::{
     DEFAULT_URL_SCHEME, 
     SUPERVISOR_DEFAULT_NAME, 
@@ -16,18 +27,29 @@ use crate::lib::constants::{
 };
 
 
+/// Represents a service that is advertised on the network.
+///
+/// Includes details such as:
+/// - Name and service type (e.g. `_webthing._tcp`)
+/// - Host IP and port
+/// - Optional service metadata (`properties`) such as TLS info
 pub struct WebthingZeroconf {
     pub service_name: String,
     pub service_type: String,
     pub host: String,
     pub port: u16,
     pub properties: Vec<(String, String)>,
-    pub registration: Option<Service>,
 }
 
 impl WebthingZeroconf {
+    /// Constructs a new service representation using env vars or defaults.
+    ///
+    /// Populates host and port using `get_listening_address()`, reads environment variables
+    /// like `PREFERRED_URL_SCHEME` and `SUPERVISOR_NAME`, and sets standard `_webthing._tcp`
+    /// service type.
     pub fn new() -> Self {
         let (host, port) = get_listening_address();
+
         let preferred_url_scheme = env::var("PREFERRED_URL_SCHEME")
             .unwrap_or_else(|_| DEFAULT_URL_SCHEME.to_string());
         let tls_flag = if preferred_url_scheme.to_lowercase() == "https" {
@@ -35,8 +57,11 @@ impl WebthingZeroconf {
         } else {
             "0"
         };
+
         let service_type = "_webthing._tcp".to_string();
-        let service_name = env::var("SUPERVISOR_NAME").unwrap_or_else(|_| SUPERVISOR_DEFAULT_NAME.to_string());
+        let service_name = env::var("SUPERVISOR_NAME")
+            .unwrap_or_else(|_| SUPERVISOR_DEFAULT_NAME.to_string());
+
         let properties = vec![
             ("path".to_string(), "/".to_string()),
             ("tls".to_string(), tls_flag.to_string()),
@@ -48,28 +73,11 @@ impl WebthingZeroconf {
             host,
             port,
             properties,
-            registration: None,
         }
-    }
-
-    /// Register supervisor using libmdns
-    pub fn register_service(&mut self, responder: &MdnsResponder) {
-        let txt_records: Vec<String> = self.properties
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect();
-        let service = responder.register(
-            self.service_type.clone(),
-            self.service_name.clone(),
-            self.port,
-            &txt_records.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-        );
-
-        self.registration = Some(service);
-        info!("Supervisor with name '{}' registered succesfully.", &self.service_name);
     }
 }
 
+/// Payload structure used when sending service registration info to orchestrator.
 #[derive(Debug, Serialize)]
 pub struct ZeroconfRegistrationData<'a> {
     #[serde(rename = "name")]
@@ -82,6 +90,10 @@ pub struct ZeroconfRegistrationData<'a> {
     host: String,
 }
 
+/// Sends a service registration POST request to the orchestrator.
+///
+/// Converts the `WebthingZeroconf` instance into the proper payload and sends it
+/// to the configured `orchestrator_url`. Logs and returns errors if any occur.
 pub async fn register_services_to_orchestrator(
     zc: &WebthingZeroconf,
     orchestrator_url: &str,
@@ -90,6 +102,7 @@ pub async fn register_services_to_orchestrator(
     for (k, v) in &zc.properties {
         props_map.insert(k.clone(), serde_json::json!(v));
     }
+
     let data = ZeroconfRegistrationData {
         name: &zc.service_name,
         kind: &zc.service_type,
@@ -98,6 +111,7 @@ pub async fn register_services_to_orchestrator(
         addresses: vec![zc.host.clone()],
         host: zc.host.clone(),
     };
+
     let client = Client::new();
     let resp = client
         .post(orchestrator_url)
@@ -105,26 +119,30 @@ pub async fn register_services_to_orchestrator(
         .timeout(Duration::from_secs(10))
         .send()
         .await?;
+
     if !resp.status().is_success() {
         let text = resp.text().await?;
         error!("Failed to register service: {}", text);
         anyhow::bail!("Orchestrator returned error: {}", text);
     }
+
     debug!("Service registered to orchestrator: {:?}", data);
     Ok(())
 }
 
-/// Spawns a background thread that tries to connect to the Actix server (host:port).
-/// Once connected, we register supervisor.
-pub fn wait_until_ready_and_register(mut zc: WebthingZeroconf) {
+/// Waits for the local supervisor server to be up, then registers the service.
+///
+/// Spawns a background thread that:
+/// - Repeatedly tries to connect to the server address
+/// - Once reachable, attempts orchestrator registration (if env var is set)
+pub fn wait_until_ready_and_register(zc: WebthingZeroconf) {
     thread::spawn(move || {
-        let responder = MdnsResponder::new().expect("Failed to create mDNS responder");
         let addr = format!("{}:{}", zc.host, zc.port);
+
         loop {
             match TcpStream::connect(&addr) {
                 Ok(_) => {
                     debug!("Server is ready at {}", addr);
-                    zc.register_service(&responder);
                     break;
                 }
                 Err(err) => {
@@ -132,32 +150,39 @@ pub fn wait_until_ready_and_register(mut zc: WebthingZeroconf) {
                     thread::sleep(Duration::from_secs(1));
                 }
             }
-            break;
         }
+
         if let Ok(mut orchestrator_url) = env::var("WASMIOT_ORCHESTRATOR_URL") {
             orchestrator_url.push_str(URL_BASE_PATH);
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(async {
+
+            let result = System::new().block_on(async {
                 register_services_to_orchestrator(&zc, &orchestrator_url).await
             });
+
             if let Err(e) = result {
                 error!("Failed to register to orchestrator: {}", e);
             }
         } else {
-            debug!("No ORCHESTRATOR_URL set, skipping orchestrator registration.");
+            debug!("No WASMIOT_ORCHESTRATOR_URL set, skipping orchestrator registration.");
         }
     });
 }
 
-/// Check env variables or use defaults.
+/// Determines the IP address and port this supervisor instance should bind to.
+///
+/// Reads:
+/// - `WASMIOT_SUPERVISOR_IP` (falls back to local IP or `127.0.0.1`)
+/// - `WASMIOT_SUPERVISOR_PORT` (falls back to default 8080)
 pub fn get_listening_address() -> (String, u16) {
-    // let host = env::var("WASMIOT_SUPERVISOR_IP").expect("Error trying to read enviroment variable WASMIOT_SUPERVISOR_IP");
     let host = env::var("WASMIOT_SUPERVISOR_IP").unwrap_or_else(|_| {
         local_ip_address::local_ip()
             .map(|ip| ip.to_string())
             .unwrap_or_else(|_| "127.0.0.1".to_string())
     });
-    let port_str = env::var("WASMIOT_SUPERVISOR_PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string());
+
+    let port_str = env::var("WASMIOT_SUPERVISOR_PORT")
+        .unwrap_or_else(|_| DEFAULT_PORT.to_string());
+
     let port: u16 = port_str.parse().unwrap_or(DEFAULT_PORT);
     (host, port)
 }

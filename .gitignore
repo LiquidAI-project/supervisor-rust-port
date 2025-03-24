@@ -2,3 +2,9 @@
 *:Zone.Identifier
 *.SERIALIZED.wasm
 *tests/*.jpeg
+*tests/*.txt
+*tests/*.sh
+*tests/*.py
+pmap*
+venv
+.venv

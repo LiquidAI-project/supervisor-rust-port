@@ -89,9 +89,9 @@ mod wasmtime_tests {
 
         // Print collected logs
         let collected_logs = logs.lock().unwrap();
-        println!("Collected Logs:");
+        println!("\nCollected Logs:");
         for (i, log) in collected_logs.iter().enumerate() {
-            println!("{}. {}", i + 1, log);
+            println!("\n{}. {}", i + 1, log);
         }
         assert!(!collected_logs.is_empty(), "No logs were captured.");
     }

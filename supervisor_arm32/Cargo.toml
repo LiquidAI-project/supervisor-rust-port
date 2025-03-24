@@ -1,0 +1,17 @@
+[package]
+name = "supervisor_arm32"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4"
+env_logger = "0.11"
+log = "0.4"
+supervisor_lib = { path = "../supervisor_lib" }
+tokio = "1.44.1"
+uuid = { version = "1.16.0", features = ["v4", "serde"] }
+wasmtime = {version = "29.0.1", features=["pulley"]}
+
+[features]
+default = ["actix-web/default", "tokio/default"]
+arm32 = ["actix-web/macros", "tokio/rt", "tokio/macros"]

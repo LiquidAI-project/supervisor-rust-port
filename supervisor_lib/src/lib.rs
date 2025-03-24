@@ -6,4 +6,5 @@ pub mod lib {
     pub mod constants;
     pub mod configuration;
     pub mod logging;
+    pub mod deployment;
 }

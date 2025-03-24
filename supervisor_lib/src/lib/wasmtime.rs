@@ -1,26 +1,34 @@
+//! # wasmtime.rs
 //!
-//! This module contains all functionality related to wasmtime
-//! 
-
+//! This module provides the core WebAssembly runtime integration using Wasmtime.
+//!
+//! It is responsible for:
+//! - Initializing and configuring the Wasmtime engine, store, and linker
+//! - Loading and serializing/deserializing Wasm modules
+//! - Instantiating modules with WASI support
+//! - Providing utilities for memory access, function calling, and export/import inspection
+//! - Managing runtime state across multiple modules
+//!
+//! This system enables invoking WebAssembly functions, accessing memory directly, linking
+//! host functions (like camera access), and handling input/output bindings for modules.
+//!
+//! It also defines:
+//! - `WasmtimeRuntime`: The central runtime manager
+//! - `WasmtimeModule`: A single Wasm module instance
+//! - `ModuleConfig`: Configuration structure used to load modules
+//! - `MLModel`: Structure representing an associated machine learning model
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::fs;
 use anyhow::Result;
-use wasmtime::{Config, Engine, Linker, Module, Store, Instance, ValType, FuncType, MemoryAccessError, Func, Memory, Val};
+use wasmtime::{Config, Engine, Func, FuncType, Instance, Linker, Memory, MemoryAccessError, Module, Store, Val, ValType};
 use wasmtime_wasi::preview1::{self, WasiP1Ctx};
 use wasmtime_wasi::{WasiCtxBuilder, DirPerms, FilePerms};
 use log::{info, error};
 use crate::lib::wasmtime_imports;
+use std::fmt;
 
-
-// TODO: Serialize every module right after they are received, and also serialize every available module of startup?
-// TODO: Is it possible/necessary to get parameter names for the functions in modules? (check current orchestrator how it displays them during manifest creation)
-// TODO: Is the memory always named "memory"?
-// TODO: Get the preopened dirs from config or some other smarter place
-// TODO: Are functions like upload_ml_model, upload_data_file, and run_ml_inference needed anymore?
-// TODO: There are no type checks for function parameters, and return types
-// TODO: Function return array is always initialized with zeroes. Depending on the function being ran, that could be confused for correct returns.
 
 // ----------------------- Wasmtime Runtime related functionality ----------------------- //
 
@@ -35,12 +43,24 @@ pub struct WasmtimeRuntime {
     pub functions: Option<HashMap<String, WasmtimeModule>>,
 }
 
+impl fmt::Debug for WasmtimeRuntime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WasmtimeRuntime")
+            .field("engine", &"<Engine>")
+            .field("store", &"<Store<WasiP1Ctx>>")
+            .field("linker", &"<Linker<WasiP1Ctx>>")
+            .field("modules", &self.modules)
+            .field("functions", &self.functions)
+            .finish()
+    }
+}
+
 
 impl WasmtimeRuntime {
 
 
     /// Initializes a new wasmtime runtime
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(data_dirs: Vec<(String, String)>) -> Result<Self, Box<dyn std::error::Error>> {
         let config: Config = Config::default();
         let engine: Engine = Engine::new(&config).unwrap();
         let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -49,7 +69,8 @@ impl WasmtimeRuntime {
         wasi_ctx.inherit_stdio();
         wasi_ctx.inherit_env();
         wasi_ctx.args(&args);
-        let preopened_dirs = [("./tests", ".")];
+        // let preopened_dirs = [("./tests", ".")];
+        let preopened_dirs = data_dirs;
         for (source, target) in preopened_dirs {
             wasi_ctx.preopened_dir(&source, &target, DirPerms::all(), FilePerms::all())?;
         }
@@ -262,6 +283,7 @@ impl WasmtimeRuntime {
 
 // ----------------------- Wasmtime module related functionality ----------------------- //
 
+#[derive(Debug, Clone)]
 pub struct WasmtimeModule {
     pub module: Option<Module>,
     pub instance: Option<Instance>,
@@ -329,7 +351,7 @@ impl WasmtimeModule {
 
 /// Struct for containing module name, file location and associated files referred to as 'mounts'. 
 /// This is what a module instance for running functions is created based on.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ModuleConfig {
     pub id: String,
     pub name: String,
@@ -364,7 +386,7 @@ impl ModuleConfig {
 }
 
 /// Struct for ML models
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MLModel {
     pub path: String,
     pub alloc_function_name: String,

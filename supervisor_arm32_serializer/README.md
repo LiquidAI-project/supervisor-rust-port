@@ -1,0 +1,1 @@
+This packages purpose is to have a simple way to serialize modules in advance for use in arm32 enviroments, because wasmtime pulley doesnt currently appear to support serializing modules directly on arm32 platforms.
