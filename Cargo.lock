@@ -2846,32 +2846,6 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 name = "supervisor"
 version = "0.1.0"
 dependencies = [
- "actix-web",
- "env_logger",
- "log",
- "supervisor_lib",
- "tokio",
- "uuid",
- "wasmtime",
-]
-
-[[package]]
-name = "supervisor_arm32"
-version = "0.1.0"
-dependencies = [
- "actix-web",
- "env_logger",
- "log",
- "supervisor_lib",
- "tokio",
- "uuid",
- "wasmtime",
-]
-
-[[package]]
-name = "supervisor_lib"
-version = "0.1.0"
-dependencies = [
  "actix-files",
  "actix-multipart",
  "actix-web",

@@ -1,8 +1,11 @@
-//! # Supervisor Entry Point (Non-ARM32)
+//! # Supervisor Entry Point
 //!
-//! This is the main executable entry point for the full version Wasm supervisor.
+//! This is the main executable entry point for the Wasmiot supervisor.
+//! 
+//! Due to possible hardware constraints, ARM32 version does **not** spawn a separate background thread
+//! for WebAssembly execution, and limits Actix-Web to a single worker thread.
 //!
-//! It performs the following startup tasks:
+//! This performs the following startup tasks:
 //! - Initializes loggers and instance directories
 //! - Starts the Actix-Web server for HTTP endpoints
 //! - Registers the device with Zeroconf (mDNS/Bonjour)
@@ -10,7 +13,7 @@
 
 use actix_web::{App, HttpServer};
 use log::info;
-use supervisor_lib::lib::{api, zeroconf, constants};
+use supervisor::lib::{api, zeroconf, constants};
 
 /// Main entry point for the supervisor service.
 ///
@@ -33,22 +36,35 @@ async fn main() -> std::io::Result<()> {
     let (host, port) = (zc.host.clone(), zc.port);
     info!("host:{}, port:{}", host, port);
 
-    // Initialize and bind the HTTP server
-    let server = HttpServer::new(move || {
-        App::new().configure(api::configure_routes)
-    })
-    .bind(("0.0.0.0", port))?;
-
-    info!("Starting supervisor service at http://{}:{}/", host, port);
+    // Launch the background WebAssembly execution thread
+    #[cfg(not(feature = "arm32"))]
+    {
+        std::thread::spawn(|| {
+            api::wasm_worker();
+        });
+    }
 
     // Wait for the server to be ready before advertising over Zeroconf
     zeroconf::wait_until_ready_and_register(zc);
 
-    // Launch the background WebAssembly execution thread
-    std::thread::spawn(|| {
-        api::wasm_worker();
-    });
-
-    // Run the Actix-Web server
-    server.run().await
+    // Initialize the HTTP server. Limit worker threads if using arm32 version.
+    #[cfg(not(feature = "arm32"))]
+    {
+        let server = HttpServer::new(move || {
+            App::new().configure(api::configure_routes)
+        })
+        .bind(("0.0.0.0", port))?;
+        info!("Starting supervisor service at http://{}:{}/", host, port);
+        server.run().await
+    }
+    #[cfg(feature = "arm32")]
+    {
+        let server = HttpServer::new(move || {
+            App::new().configure(api::configure_routes)
+        })
+        .workers(1)
+        .bind(("0.0.0.0", port))?;
+        info!("Starting supervisor service at http://{}:{}/", host, port);
+        server.run().await
+    }
 }

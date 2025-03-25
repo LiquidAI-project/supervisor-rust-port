@@ -105,11 +105,18 @@ impl WasmtimeRuntime {
                 // Module should be serialized since the serialized version doesnt exist yet
                 should_compile = true; 
             }
+            #[cfg(not(feature = "arm32"))]
             if should_compile {
                 // Compile and save a serialized version of the module
                 let module = wasmtime::Module::from_file(&self.engine, config.path.clone())?;
                 let module_bytes = module.serialize()?;
                 fs::write(&path_serial, module_bytes)?;
+            }
+            #[cfg(feature = "arm32")]
+            if should_compile {
+                // Compilation is not supported on arm32 targets
+                error!("Tried loading an unserialized module on arm32 device. This is not a supported operation. Loading module {} failed.", module_name);
+                return Err("Compilation is not supported on arm32 targets. Precompiled/serialized .wasm modules must be used.".into());
             }
             let deserialized_module = unsafe { 
                 // NOTE: The serialized module file being loaded can be tampered with, which could cause issues, which makes it unsafe.

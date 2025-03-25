@@ -12,13 +12,16 @@
 
 use wasmtime::{Caller, Val, Result};
 use wasmtime_wasi::preview1::WasiP1Ctx;
+#[cfg(not(feature = "arm32"))]
 use std::env;
+#[cfg(not(feature = "arm32"))]
 use opencv::{
     prelude::*,
     videoio::{VideoCapture, VideoCaptureTrait, CAP_ANY},
     imgcodecs::{imencode, IMWRITE_JPEG_QUALITY},
     core::{Vector, Mat},
 };
+
 
 /// Host function import: dynamically captures a JPEG image and returns its buffer pointer + length.
 ///
@@ -38,9 +41,11 @@ use opencv::{
 /// # Note
 /// - This currently always writes the buffer at offset `0`. If multiple images are captured,
 ///   this could cause memory overwrite in Wasm unless the module handles allocation.
-///
+/// - This function currently does nothing in an arm32 enviroment.
+/// 
 /// # Safety
 /// This function assumes Wasm has exported a linear memory named "memory".
+#[cfg(not(feature = "arm32"))]
 #[allow(non_snake_case)]
 pub fn takeImageDynamicSize(
     mut caller: Caller<'_, WasiP1Ctx>,
@@ -70,7 +75,6 @@ pub fn takeImageDynamicSize(
     // Write buffer pointer and size back into Wasm memory
     memory.write(&mut caller, out_ptr_ptr as usize, &(offset as u32).to_le_bytes())?;
     memory.write(&mut caller, out_size_ptr as usize, &(data_len as u32).to_le_bytes())?;
-
     Ok(())
 }
 
@@ -86,9 +90,13 @@ pub fn takeImageDynamicSize(
 /// * `args[0]`: pointer to buffer location where image should be written (u32)
 /// * `args[1]`: pointer to 4-byte location containing the desired size (u32)
 ///
+/// # Notes
+/// - This function currently does nothing in arm32 enviroments
+/// 
 /// # Returns
 /// * `Ok(())` if successful, or error if arguments or memory access fails
 #[allow(non_snake_case)]
+#[cfg(not(feature = "arm32"))]
 pub fn takeImageStaticSize(
     mut caller: Caller<'_, WasiP1Ctx>,
     args: &[Val],
@@ -116,7 +124,6 @@ pub fn takeImageStaticSize(
 
     image_data.truncate(expected_size);
     memory.write(&mut caller, out_ptr as usize, &image_data)?;
-
     Ok(())
 }
 
@@ -125,6 +132,9 @@ pub fn takeImageStaticSize(
 /// Attempts to read the camera device defined in the `DEFAULT_CAMERA_DEVICE` environment variable,
 /// or falls back to device `0` if unset.
 ///
+/// # Notes
+/// - This function currently does nothing on arm32 enviroments
+/// 
 /// # Returns
 /// A valid OpenCV `Mat` frame or a string describing the failure.
 ///
@@ -132,6 +142,7 @@ pub fn takeImageStaticSize(
 /// - Camera not available
 /// - Capture failure
 /// - Frame is empty
+#[cfg(not(feature = "arm32"))]
 pub fn capture_image() -> Result<Mat, String> {
     let device = env::var("DEFAULT_CAMERA_DEVICE")
         .ok()
@@ -147,6 +158,30 @@ pub fn capture_image() -> Result<Mat, String> {
     if frame.empty() {
         return Err("Captured frame is empty".into());
     }
-
     Ok(frame)
+}
+
+#[cfg(feature = "arm32")]
+pub fn capture_image() {
+    ()
+}
+
+#[allow(non_snake_case)]
+#[cfg(feature = "arm32")]
+pub fn takeImageDynamicSize(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    Ok(())
+}
+
+#[allow(non_snake_case)]
+#[cfg(feature = "arm32")]
+pub fn takeImageStaticSize(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    Ok(())
 }

@@ -4,6 +4,10 @@ Rust version of the existing wasmiot supervisor (found in https://github.com/Liq
 
 Currently in development. All functionality has been added, but remains untested.
 
+Compile with " cargo build --release "
+
+Compile to arm32 (using cross) with " cross build --features=arm32 --no-default-features --target=armv7-unknown-linux-gnueabihf --release "
+
 ## How to run
 
 ### With docker
@@ -16,7 +20,7 @@ Currently in development. All functionality has been added, but remains untested
 ### Without docker
 
 0. ( Install rust and cargo if not installed already )
-1. Following packages are required for camera functionality:
+1. Following system packages may be required for camera functionality:
     - pkg-config 
     - libopencv-dev 
     - clang 
@@ -27,6 +31,24 @@ Currently in development. All functionality has been added, but remains untested
 3. Run "export $(grep -v '^#' .env | xargs)" without quotation marks in the folder where .env file is to load the enviroment variables.
 4. In the same console session, run "cargo run" to start the supervisor.
 5. If everything worked correctly (and you didnt change enviroment variables) the supervisor is available through 127.0.0.1:8080. Test this in browser by trying if healthcheck works by going to "http://127.0.0.1:8080/health". Note that connecting to orchestrator (which is running in a container) wont work correctly with this setup.
+
+### On Arm32 platforms
+
+Currently the supervisor is meant to support arm32 platforms as well, as it is the platform on many minimal embedded devices. The supervisor should be compiled on some other system, and the compiled binary moved to target device after that. To compile the binary you have to add the arm32 target to cargo, and install other required system packages for cross-compilation. Assuming ubuntu where cargo is already installed, run the following commands:
+
+(TODO)
+
+After that, you can compile the supervisor by running:
+
+cargo build --no-default-features --features=arm32 --release --target=armv7-unknown-linux-gnueabihf
+
+## Development
+
+To change vscode rust analyzer feature set (for example when developing the arm32 feature set), add the following line to settings.json:
+
+"rust-analyzer.cargo.features": ["arm32"]
+
+Open the settings.json by pressing ctrl+shift+p, search "json", and select "open user settings (json)". Restart the rust extension after saving changes. To disable the feature, remove the line and restart extension again.
 
 ## Tests
 
