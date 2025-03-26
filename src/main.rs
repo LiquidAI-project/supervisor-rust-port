@@ -12,7 +12,7 @@
 //! - Spawns a background worker thread for executing WebAssembly tasks asynchronously
 
 use actix_web::{App, HttpServer};
-use log::info;
+use log::{info, warn};
 use supervisor::lib::{api, zeroconf, constants};
 
 /// Main entry point for the supervisor service.
@@ -25,6 +25,12 @@ use supervisor::lib::{api, zeroconf, constants};
 /// - Any `std::io::Error` that occurs during HTTP server setup
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // Load environment variables from .env if present
+    match dotenv::dotenv() {
+        Ok(path) => info!("Loaded .env from {:?}", path),
+        Err(err) => warn!("Could not load .env file: {:?}", err),
+    }
+
     // Ensure required folders like `params/` and `modules/` exist
     constants::ensure_required_folders();
 

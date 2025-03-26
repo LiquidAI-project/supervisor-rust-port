@@ -16,7 +16,7 @@ use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
 use reqwest::Client;
-use log::{error, debug};
+use log::{error, debug, info};
 use local_ip_address;
 use actix_web::rt::System;
 use crate::lib::constants::{
@@ -112,13 +112,22 @@ pub async fn register_services_to_orchestrator(
         host: zc.host.clone(),
     };
 
+    info!("Sending registration to: {}", orchestrator_url);
+    info!("Payload: {:?}", data);
+
     let client = Client::new();
-    let resp = client
-        .post(orchestrator_url)
-        .json(&data)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await?;
+    let req = client
+    .post(orchestrator_url)
+    .json(&data)
+    .timeout(Duration::from_secs(10));
+
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Failed to send registration request: {}", e);
+            return Err(anyhow::anyhow!("Request error: {:?}", e));
+        }
+    };
 
     if !resp.status().is_success() {
         let text = resp.text().await?;

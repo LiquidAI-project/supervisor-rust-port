@@ -1072,6 +1072,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 
         // Delete an existing deployment by ID
         .route("/deploy/{deployment_id}", web::delete().to(deployment_delete))
+        .route("//deploy/{deployment_id}", web::delete().to(deployment_delete))
 
         // Create a new deployment with modules and optional mount/config data
         .route("/deploy", web::post().to(deployment_create));

@@ -1,0 +1,20 @@
+{
+    "name": "Supervisor dev",
+    "image": "mcr.microsoft.com/vscode/devcontainers/rust:latest",
+    "runArgs": [
+      "--network=wasmiot-net",
+      "--name=supervisor-dev",
+      "--device=/dev/video0", 
+      "--privileged"
+    ],
+    "customizations": {
+      "vscode": {
+        "extensions": [
+          "rust-lang.rust-analyzer",
+          "tamasfe.even-better-toml"
+        ]
+      }
+    },
+    "postCreateCommand": "bash .devcontainer-setup.sh"
+  } 
+  
