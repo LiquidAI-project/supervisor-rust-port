@@ -5,7 +5,12 @@
 *tests/*.txt
 *tests/*.sh
 *tests/*.py
+*tests/*.json
+*tests/*.wasm
+*tests/*.onnx
 pmap*
 venv
 .venv
 .env
+instance/wasm-modules/*
+instance/wasm-params/*

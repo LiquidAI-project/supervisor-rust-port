@@ -185,3 +185,295 @@ pub fn takeImageStaticSize(
 ) -> Result<()> {
     Ok(())
 }
+
+// Placeholder functions for making supervisor able to run modules that require them
+// without implementing the actual functionality.
+
+// Matches original placeholder listing of supervisor interfaces, and functions listed in wasm3_api (wasmiot_modules repository)
+
+pub fn millis(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn delay(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn print(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn println(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn printInt(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn rpcCall(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn takeImage(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn path_open(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn fd_filestat_get(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn fd_read(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn fd_readdir(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn fd_seek(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn fd_write(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn fd_close(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn fd_prestat_get(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn fd_prestat_dir_name(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn sched_yield(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn random_get(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn proc_exit(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn environ_sizes_get(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn environ_get(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn pinMode(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn digitalWrite(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn getPinLED(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn getChipID(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn printFloat(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn wifiConnect(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn wifiStatus(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn wifiLocalIp(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn printWifiLocalIp(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn httpPost(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+pub fn http_post(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn readTemperature(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}
+
+#[allow(non_snake_case)]
+pub fn readHumidity(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    _args: &[Val],
+    _results: &mut [Val],
+) -> Result<()> {
+    unimplemented!();
+}

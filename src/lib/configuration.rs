@@ -104,7 +104,7 @@ pub fn get_device_description() -> Value {
         .unwrap_or_else(|e| panic!("Error parsing JSON in {}: {}", path.display(), e));
 
     description["platform"] = get_device_platform_info();
-    description["supervisorInterfaces"] = json!(SUPERVISOR_INTERFACES);
+    description["supervisorInterfaces"] = json!(SUPERVISOR_INTERFACES.to_vec());
     description
 }
 

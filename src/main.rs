@@ -57,7 +57,7 @@ async fn main() -> std::io::Result<()> {
     #[cfg(not(feature = "arm32"))]
     {
         let server = HttpServer::new(move || {
-            App::new().configure(api::configure_routes)
+            App::new().wrap(actix_web::middleware::Logger::default()).configure(api::configure_routes)
         })
         .bind(("0.0.0.0", port))?;
         info!("Starting supervisor service at http://{}:{}/", host, port);

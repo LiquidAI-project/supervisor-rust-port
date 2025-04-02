@@ -183,10 +183,10 @@ impl WasmtimeRuntime {
 
     /// Link remote functions to wasmtime runtime for use by wasm modules.
     pub fn link_remote_functions(&mut self) {
-
-        // NOTE: Missing: System functions "millis", "delay", "print", "println", "printInt"
-        // NOTE: Missing: Communication functions "rpcCall"
-        // NOTE: Missing: Peripheral functions "getTemperature", "getHumidity"
+        
+        /////////////////////////////////////////////////////////////////////
+        // Camera related external functions
+        /////////////////////////////////////////////////////////////////////
         
         let _ = &self.linker.func_new(
             "camera",
@@ -199,6 +199,145 @@ impl WasmtimeRuntime {
             "takeImageStaticSize",
             FuncType::new(&self.engine, [ValType::I32, ValType::I32], []),
             wasmtime_imports::takeImageStaticSize,
+        );
+        let _ = &self.linker.func_new(
+            "camera",
+            "takeImage",
+            FuncType::new(&self.engine, [ValType::I32, ValType::I32], []),
+            wasmtime_imports::takeImage,
+        );
+
+        /////////////////////////////////////////////////////////////////////
+        // System related external functions (TODO: Functions are unimplemented)
+        /////////////////////////////////////////////////////////////////////
+
+        let _ = &self.linker.func_new(
+            "sys",
+            "millis",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::millis,
+        );
+        let _ = &self.linker.func_new(
+            "sys",
+            "delay",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::delay,
+        );
+        let _ = &self.linker.func_new(
+            "sys",
+            "pinMode",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::pinMode,
+        );
+        let _ = &self.linker.func_new(
+            "digitalWrite",
+            "millis",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::digitalWrite,
+        );
+        let _ = &self.linker.func_new(
+            "sys",
+            "getPinLED",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::getPinLED,
+        );
+        let _ = &self.linker.func_new(
+            "sys",
+            "getChipID",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::getChipID,
+        );
+        let _ = &self.linker.func_new(
+            "sys",
+            "print",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::print,
+        );
+        let _ = &self.linker.func_new(
+            "sys",
+            "printInt",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::printInt,
+        );
+        let _ = &self.linker.func_new(
+            "sys",
+            "printFloat",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::printFloat,
+        );
+
+        /////////////////////////////////////////////////////////////////////
+        // Wifi related external functions (TODO: Functions are unimplemented)
+        /////////////////////////////////////////////////////////////////////
+
+        let _ = &self.linker.func_new(
+            "wifi",
+            "wifiConnect",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::wifiConnect,
+        );
+        let _ = &self.linker.func_new(
+            "wifi",
+            "wifiStatus",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::wifiStatus,
+        );
+        let _ = &self.linker.func_new(
+            "wifi",
+            "wifiLocalIp",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::wifiLocalIp,
+        );
+        let _ = &self.linker.func_new(
+            "wifi",
+            "printWifiLocalIp",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::printWifiLocalIp,
+        );
+
+        /////////////////////////////////////////////////////////////////////
+        // Communication related external functions (TODO: Functions are unimplemented)
+        /////////////////////////////////////////////////////////////////////
+
+        let _ = &self.linker.func_new(
+            "communication",
+            "rpcCall",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::rpcCall,
+        );
+
+        /////////////////////////////////////////////////////////////////////
+        // http related external functions (TODO: Functions are unimplemented)
+        /////////////////////////////////////////////////////////////////////
+
+        let _ = &self.linker.func_new(
+            "http",
+            "httpPost",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::httpPost,
+        );
+        let _ = &self.linker.func_new(
+            "http",
+            "http_post",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::http_post,
+        );
+        
+        /////////////////////////////////////////////////////////////////////
+        // dht related external functions (TODO: Functions are unimplemented)
+        /////////////////////////////////////////////////////////////////////
+
+        let _ = &self.linker.func_new(
+            "dht",
+            "readTemperature",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::readTemperature,
+        );
+        let _ = &self.linker.func_new(
+            "dht",
+            "readHumidity",
+            FuncType::new(&self.engine, [], []),
+            wasmtime_imports::readHumidity,
         );
 
     }
@@ -258,13 +397,13 @@ impl WasmtimeRuntime {
     pub fn run_function(&mut self, module_name: &str, func_name: &str, params: Vec<Val>, returns: usize) -> Vec<Val>{
         let params_thingy: &[Val] = &params;
         let returns_thingy: &mut[Val] = &mut vec![Val::I32(0); returns];
-        info!("Attempting to run function {} from module {}...", module_name, func_name);
+        info!("Attempting to run function {} from module {}...", func_name, module_name);
         let _ = match &self.get_function(module_name, func_name) {
             Some(func) => {
                 func.call(&mut self.store, params_thingy, returns_thingy)
             }
             None => {
-                error!("Failed to run function {} from module {}.", module_name, func_name);
+                error!("Failed to run function {} from module {}.", func_name, module_name);
                 Ok(())
             }
         };

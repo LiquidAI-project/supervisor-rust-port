@@ -49,6 +49,7 @@ use chrono::{Utc, DateTime};
 use std::collections::HashMap;
 use sha2::{Sha256, Digest};
 use hex;
+use log::{info, error};
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
@@ -56,6 +57,7 @@ use wasmtime::Val;
 use sanitize_filename;
 use futures_util::StreamExt;
 use std::fs::File;
+use std::env;
 use std::io::Write;
 use crate::lib::configuration::{get_wot_td, get_device_description};
 use crate::lib::logging::{send_log, get_device_ip};
@@ -541,6 +543,14 @@ pub async fn get_module_result(req: HttpRequest, path: web::Path<(String, String
     }
 }
 
+/// Handler for getting request history list
+/// 
+/// This is here to match a path that has no parameters vs the default 1 parameter
+pub async fn request_history_list_1() -> impl Responder {
+    let new_path = web::Path::from("".to_string());
+    request_history_list(new_path).await
+}
+
 /// Returns previous WebAssembly execution entries or one specific request if ID is given.
 ///
 /// Supports:
@@ -549,23 +559,20 @@ pub async fn get_module_result(req: HttpRequest, path: web::Path<(String, String
 ///
 /// The response includes the success state and result of each request.
 /// If the matched request failed, it returns HTTP 500 instead of 200.
-pub async fn request_history_list(path: web::Path<Option<String>>) -> impl Responder {
-    let request_id = path.into_inner();
+pub async fn request_history_list(path: web::Path<String>) -> impl Responder {
+    let id = path.into_inner();
     let history = REQUEST_HISTORY.lock().unwrap();
-
-    if let Some(id) = request_id {
+    if id != "" {
         let func_name = function_name!().to_string();
         let log_msg = format!("Requested history for request ID: {}", id);
         tokio::spawn(async move {
             send_log("INFO", &log_msg, &func_name, None).await;
         });
-
         if let Some(req) = history.iter().find(|r| r.request_id == id) {
             let status_code = if req.success { 200 } else { 500 };
             return HttpResponse::build(actix_web::http::StatusCode::from_u16(status_code).unwrap())
                 .json(req);
         }
-
         HttpResponse::NotFound().json(json!({
             "error": "No request with that ID",
             "request_id": id
@@ -580,6 +587,20 @@ pub async fn request_history_list(path: web::Path<Option<String>>) -> impl Respo
         HttpResponse::Ok().json(&*history)
     }
 }
+
+/// Handler for running a module function
+/// 
+/// This is here to match a path that has only 3 parameters vs the default 4 parameters
+pub async fn run_module_function_3(
+    path: web::Path<(String, String, String)>,
+    req: HttpRequest,
+    payload: web::Payload,
+) -> impl Responder {
+    let (deployment_id, module_name, function_name) = path.into_inner();
+    let new_path = web::Path::from((deployment_id, module_name, function_name, None));
+    run_module_function(new_path, req, payload).await
+}
+
 
 /// Executes a function in a given module in a given deployment.
 ///
@@ -731,8 +752,19 @@ pub async fn run_module_function(
     } else {
         entry = make_history(entry); // sync GET
     }
-
-    let result_url = format!("/request-history/{}", entry.request_id);
+    let http_scheme = env::var("DEFAULT_URL_SCHEME").unwrap_or_else(|_| {
+        error!("Failed to read DEFAULT_URL_SCHEME from enviroment variables, defaulting to 'http'.");
+        "http".to_string()
+    });
+    let host = env::var("WASMIOT_SUPERVISOR_IP").unwrap_or_else(|_| {
+        error!("Failed to read WASMIOT_SUPERVISOR_IP from enviroment variables, defaulting to 'localhost'.");
+        "localhost".to_string()
+    });
+    let port = env::var("WASMIOT_SUPERVISOR_PORT").unwrap_or_else(|_| {
+        error!("Failed to read WASMIOT_SUPERVISOR_PORT from enviroment variables, defaulting to '8080'.");
+        "8080".to_string()
+    });
+    let result_url = format!("{}://{}:{}/request-history/{}", http_scheme, host, port, entry.request_id);
     HttpResponse::Ok().json(json!({ "resultUrl": result_url }))
 }
 
@@ -871,7 +903,10 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
             continue;
         }
 
-        // Fetch "other" files
+        // Create the params folder by default
+        let path = get_params_path(&name, None);
+        std::fs::create_dir_all(path).ok();
+
         let mut data_files = HashMap::new();
         if let Some(other_map) = module.get("urls")
             .and_then(|urls| urls.get("other"))
@@ -1059,20 +1094,20 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 
         // Fetch execution history (entire list or single entry by ID)
         .route("/request-history/{request_id}", web::get().to(request_history_list))
-        .route("/request-history", web::get().to(request_history_list))
+        .route("/request-history", web::get().to(request_history_list_1))
 
         // Serve result file produced by specific function execution
         .route("/{deployment_id}/modules/{module_name}/{function_name}/{filename}", web::get().to(run_module_function))
 
         // Run a module function (GET: immediate execution, no input files)
-        .route("/{deployment_id}/modules/{module_name}/{function_name}", web::get().to(run_module_function))
+        .route("/{deployment_id}/modules/{module_name}/{function_name}", web::get().to(run_module_function_3))
+        // Supposedly this doesnt match:   /67ebca4c67d46c4d7f551bea/modules/fibo/fibo?param0=7
 
         // Run a module function (POST: allows input files via multipart)
-        .route("/{deployment_id}/modules/{module_name}/{function_name}", web::post().to(run_module_function))
+        .route("/{deployment_id}/modules/{module_name}/{function_name}", web::post().to(run_module_function_3))
 
         // Delete an existing deployment by ID
         .route("/deploy/{deployment_id}", web::delete().to(deployment_delete))
-        .route("//deploy/{deployment_id}", web::delete().to(deployment_delete))
 
         // Create a new deployment with modules and optional mount/config data
         .route("/deploy", web::post().to(deployment_create));

@@ -13,6 +13,7 @@ use serde_json::json;
 use std::env;
 use reqwest::Client;
 use crate::lib::api::RequestEntry;
+use std::collections::HashMap;
 use log::{info, debug, warn, error};
 
 /// Sends a structured log message to the configured external logging server,
@@ -74,9 +75,13 @@ pub async fn send_log(
         let endpoint = env::var("WASMIOT_LOGGING_ENDPOINT")
             .unwrap_or_else(|_| "http://localhost:3000/device/logs".to_string());
 
+        let mut form_data = HashMap::new(); // The orhchestrator expects logs as form data instead of json
+        let log_data_string = serde_json::to_string(&log_data).unwrap();
+        form_data.insert("logData", log_data_string);
+
         if let Err(e) = client
             .post(&endpoint)
-            .json(&json!({ "logData": log_data }))
+            .form(&form_data)
             .send()
             .await
         {
@@ -112,6 +117,16 @@ macro_rules! function_name {
             std::any::type_name::<T>()
         }
         let name = type_name_of(f);
-        name.strip_suffix("::f").unwrap().strip_suffix("::{{closure}}").unwrap()
+
+        // Strip known suffixes, but avoid panic if they are not present
+        if let Some(stripped_name) = name.strip_suffix("::f") {
+            if let Some(stripped_again) = stripped_name.strip_suffix("::{{closure}}") {
+                stripped_again
+            } else {
+                stripped_name
+            }
+        } else {
+            name // Return the original name if stripping fails
+        }
     }};
 }

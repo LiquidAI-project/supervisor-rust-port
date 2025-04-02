@@ -20,7 +20,7 @@ use std::fs::File;
 use std::fs;
 use serde_json::Value;
 use serde::{Deserialize, Serialize};
-use log::{error, warn};
+use log::{error, warn, info};
 use serde_json::Map;
 use std::iter::Iterator;
 use strum_macros::{EnumString, AsRefStr};
@@ -38,12 +38,16 @@ use crate::lib::wasmtime::{WasmtimeRuntime, WasmtimeModule, ModuleConfig};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, AsRefStr, Serialize, Deserialize)]
 pub enum MountStage {
     #[strum(serialize = "deployment")]
+    #[serde(rename = "deployment")]
     DEPLOYMENT,
     #[strum(serialize = "execution")]
+    #[serde(rename = "execution")]
     EXECUTION,
     #[strum(serialize = "output")]
+    #[serde(rename = "output")]
     OUTPUT,
     #[strum(serialize = "unknown")]
+    #[serde(rename = "unknown")]
     UNKNOWN,
 }
 
@@ -72,7 +76,7 @@ pub struct MountPathFile {
     pub stage: MountStage,
     pub required: bool,
     pub encoding: String,
-    pub _type: String,
+    pub r#type: String,
 }
 
 impl MountPathFile {
@@ -83,7 +87,7 @@ impl MountPathFile {
         stage: S,
         required: Option<bool>,
         encoding: Option<String>,
-        _type: Option<String>,
+        r#type: Option<String>,
     ) -> Self {
         MountPathFile {
             path,
@@ -91,7 +95,7 @@ impl MountPathFile {
             stage: stage.into(),
             required: required.unwrap_or(true),
             encoding: encoding.unwrap_or_else(|| "base64".to_string()),
-            _type: _type.unwrap_or_else(|| "string".to_string()),
+            r#type: r#type.unwrap_or_else(|| "string".to_string()),
         }
     }
 
@@ -113,12 +117,16 @@ impl MountPathFile {
 #[derive(Debug, Clone, PartialEq, Eq, EnumString, AsRefStr, Serialize, Deserialize)]
 pub enum SchemaType {
     #[strum(serialize = "integer")]
+    #[serde(rename = "integer")]
     INTEGER,
     #[strum(serialize = "string")]
+    #[serde(rename = "string")]
     STRING,
     #[strum(serialize = "object")]
+    #[serde(rename = "object")]
     OBJECT,
     #[strum(serialize = "unknown")]
+    #[serde(rename = "unknown")]
     UNKNOWN,
 }
 
@@ -139,8 +147,10 @@ impl From<String> for SchemaType {
 #[derive(Debug, Clone, PartialEq, Eq, EnumString, AsRefStr, Serialize, Deserialize)]
 pub enum SchemaFormat {
     #[strum(serialize = "binary")]
+    #[serde(rename = "binary")]
     BINARY,
     #[strum(serialize = "unknown")]
+    #[serde(rename = "unknown")]
     UNKNOWN,
 }
 
@@ -162,7 +172,7 @@ impl From<String> for SchemaFormat {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Schema {
     /// The top-level type (e.g. string, object, etc.)
-    pub _type: SchemaType,
+    pub r#type: SchemaType,
 
     /// Optional format (e.g. "binary") associated with the type
     pub format: Option<SchemaFormat>,
@@ -174,13 +184,13 @@ pub struct Schema {
 impl Schema {
     /// Constructs a new schema instance with optional format and nested properties.
     pub fn new<T: Into<SchemaType>, F: Into<Option<String>>>(
-        _type: T,
+        r#type: T,
         format: F,
         properties: Option<HashMap<String, Value>>,
     ) -> Self {
         let format_option: Option<SchemaFormat> = format.into().map(SchemaFormat::from);
         Schema {
-            _type: _type.into(),
+            r#type: r#type.into(),
             format: format_option,
             properties,
         }
@@ -895,17 +905,40 @@ impl Deployment {
         let primitive_args: Vec<Val> = args.values()
             .zip(arg_types.iter())
             .map(|(value, typ)| match typ {
-                ValType::I32 => Val::I32(value.as_i64().unwrap_or_default() as i32),
-                ValType::I64 => Val::I64(value.as_i64().unwrap_or_default()),
-                ValType::F32 => Val::F32((value.as_f64().unwrap_or_default() as f32).to_bits()),
-                ValType::F64 => Val::F64(value.as_f64().unwrap_or_default().to_bits()),
+                ValType::I32 => {
+                    match value {
+                        Value::Number(num) => Val::I32(num.as_i64().unwrap_or_default() as i32),
+                        Value::String(s) => s.parse::<i32>().map(Val::I32).unwrap_or(Val::I32(0)),
+                        _ => Val::I32(0),
+                    }
+                }
+                ValType::I64 => {
+                    match value {
+                        Value::Number(num) => Val::I64(num.as_i64().unwrap_or_default()),
+                        Value::String(s) => s.parse::<i64>().map(Val::I64).unwrap_or(Val::I64(0)),
+                        _ => Val::I64(0),
+                    }
+                }
+                ValType::F32 => {
+                    match value {
+                        Value::Number(num) => Val::F32((num.as_f64().unwrap_or_default() as f32).to_bits()),
+                        Value::String(s) => s.parse::<f32>().map(|f| Val::F32(f.to_bits())).unwrap_or(Val::F32(0)),
+                        _ => Val::F32(0),
+                    }
+                }
+                ValType::F64 => {
+                    match value {
+                        Value::Number(num) => Val::F64(num.as_f64().unwrap_or_default().to_bits()),
+                        Value::String(s) => s.parse::<f64>().map(|f| Val::F64(f.to_bits())).unwrap_or(Val::F64(0)),
+                        _ => Val::F64(0),
+                    }
+                }
                 _ => {
                     error!("Unsupported argument type: {:?}", typ);
                     Val::I32(0)
                 }
             })
             .collect();
-
         Ok((module.clone(), primitive_args))
     }
 
@@ -998,7 +1031,7 @@ impl Deployment {
 /// # Returns
 /// * `true` if the type is compatible with WASM primitive representation.
 pub fn can_be_represented_as_wasm_primitive(schema: &Schema) -> bool {
-    matches!(schema._type, SchemaType::INTEGER)
+    matches!(schema.r#type, SchemaType::INTEGER)
 }
 
 /// Builds the absolute host path for a file mounted into a specific module.

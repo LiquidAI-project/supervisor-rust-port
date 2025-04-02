@@ -54,9 +54,44 @@ pub static PARAMS_FOLDER: Lazy<PathBuf> = Lazy::new(|| INSTANCE_PATH.join(PARAMS
 /// The predefined list of supported interfaces for wasm modules.
 ///
 /// These refer to function names the supervisor imports into each wasm module.
-pub const SUPERVISOR_INTERFACES: [&str; 2] = [
-    "takeImageDynamicSize",
-    "takeImageStaticSize"
+/// Most of these arent actually implemented but are here for compatibility reasons.
+pub const SUPERVISOR_INTERFACES: [&str; 36] = [
+    "millis",
+    "delay",
+    "print",
+    "println",
+    "printInt",
+    "rpcCall",
+    "takeImage",
+    "takeImageDynamicSize", // This is actually implemented
+    "takeImageStaticSize", // This is actually implemented
+    "path_open",
+    "fd_filestat_get",
+    "fd_read",
+    "fd_readdir",
+    "fd_seek",
+    "fd_write",
+    "fd_close",
+    "fd_prestat_get",
+    "fd_prestat_dir_name",
+    "sched_yield",
+    "random_get",
+    "proc_exit",
+    "environ_sizes_get",
+    "environ_get",
+    "pinMode",
+    "digitalWrite",
+    "getPinLED",
+    "getChipID",
+    "printFloat",
+    "wifiConnect",
+    "wifiStatus",
+    "wifiLocalIp",
+    "printWifiLocalIp",
+    "httpPost",
+    "http_post",
+    "readTemperature",
+    "readHumidity"
 ];
 
 /// List of media types considered valid for file-based inputs and outputs.
