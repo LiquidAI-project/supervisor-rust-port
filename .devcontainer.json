@@ -1,10 +1,13 @@
 {
     "name": "Supervisor dev",
-    "image": "mcr.microsoft.com/vscode/devcontainers/rust:latest",
+    "build" : {
+      "dockerfile": ".devcontainer.Dockerfile",
+      "context": "."
+    },
     "runArgs": [
       "--network=wasmiot-net",
       "--name=supervisor-dev",
-      "--device=/dev/video0", 
+      "--device=/dev/video0:/dev/video0",
       "--privileged"
     ],
     "customizations": {

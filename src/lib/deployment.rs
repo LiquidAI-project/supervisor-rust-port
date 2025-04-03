@@ -870,7 +870,7 @@ impl Deployment {
     /// - Converts function arguments into WebAssembly primitive values.
     ///
     /// Returns the instantiated module and list of WASM `Val`s as arguments.
-    pub fn prepare_for_running(
+    pub async fn prepare_for_running(
         &mut self,
         module_name: &str,
         function_name: &str,
@@ -893,12 +893,12 @@ impl Deployment {
             .get_mut(module_name)
             .ok_or_else(|| format!("Runtime for module '{}' not found", module_name))?;
 
-        runtime.load_module(config.clone())
+        runtime.load_module(config.clone()).await
             .map_err(|e| format!("Failed to load module: {}", e))?;
 
-        let arg_types = runtime.get_arg_types(module_name, function_name); // TODO: Is this an issue to do at this point or not?
+        let arg_types = runtime.get_arg_types(module_name, function_name).await; // TODO: Is this an issue to do at this point or not?
 
-        let module = runtime.get_module(module_name)
+        let module = runtime.get_module(module_name).await
             .ok_or_else(|| format!("Module '{}' not found after load", module_name))?;
 
         // Convert arguments from serde_json::Value → wasmtime::Val based on type hints.

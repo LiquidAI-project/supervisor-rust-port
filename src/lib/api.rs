@@ -195,7 +195,7 @@ impl RequestEntry {
 /// 2. Interprets its result,
 /// 3. Initiates a next call if the deployment specifies one,
 /// 4. Returns the result or sub-response.
-pub fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
+pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
     let mut deployments = DEPLOYMENTS.lock().unwrap();
     let deployment = deployments.get_mut(&entry.deployment_id)
         .ok_or_else(|| format!("Deployment '{}' not found", entry.deployment_id))?;
@@ -222,7 +222,7 @@ pub fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
         &entry.function_name,
         &request_args,
         &entry.request_files,
-    )?;
+    ).await?;
 
     let func_name = function_name!().to_string();
     let entry_function_name = entry.function_name.clone();
@@ -239,13 +239,13 @@ pub fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
     let runtime = deployment.runtimes.get_mut(&entry.module_name)
         .ok_or_else(|| format!("Runtime not found for module '{}'", entry.module_name))?;
 
-    let return_count = runtime.get_return_types(&entry.module_name, &entry.function_name).len();
+    let return_count = runtime.get_return_types(&entry.module_name, &entry.function_name).await.len();
     let output_vals = runtime.run_function(
         &entry.module_name,
         &entry.function_name,
         wasm_args,
         return_count,
-    );
+    ).await;
 
     let raw_output = output_vals.first().map(|v| match v {
         Val::I32(i) => json!(i),
@@ -348,14 +348,15 @@ pub fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
             ).await;
         });
 
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::Client::new();
         let response = client
             .request(call_data.method.parse().unwrap_or(reqwest::Method::POST), &call_data.url)
             .headers(headers)
             .send()
+            .await
             .map_err(|e| format!("Failed to send chained request: {}", e))?;
 
-        return response.json().map_err(|e| format!("Invalid response JSON: {}", e));
+        return response.json().await.map_err(|e| format!("Invalid response JSON: {}", e));
     }
 
     Ok(json!({ "result": entry.result }))
@@ -376,8 +377,8 @@ pub fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
 ///
 /// # Returns
 /// - The updated `RequestEntry` with result and success set
-pub fn make_history(mut entry: RequestEntry) -> RequestEntry {
-    match do_wasm_work(&mut entry) {
+pub async fn make_history(mut entry: RequestEntry) -> RequestEntry {
+    match do_wasm_work(&mut entry).await {
         Ok(result) => {
             entry.result = Some(result);
             entry.success = true;
@@ -750,7 +751,7 @@ pub async fn run_module_function(
             entry = make_history(entry); // fallback: sync exec
         }
     } else {
-        entry = make_history(entry); // sync GET
+        entry = make_history(entry).await; // sync GET
     }
     let http_scheme = env::var("DEFAULT_URL_SCHEME").unwrap_or_else(|_| {
         error!("Failed to read DEFAULT_URL_SCHEME from enviroment variables, defaulting to 'http'.");
@@ -997,7 +998,7 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
     for config in &module_configs {
         match WasmtimeRuntime::new(vec![
             (get_params_path(&config.name, None).to_string_lossy().to_string(), ".".to_string())
-        ]) {
+        ]).await {
             Ok(runtime) => {
                 runtimes.insert(config.name.clone(), runtime);
             }
@@ -1057,7 +1058,7 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
         mounts,
     );
 
-    DEPLOYMENTS.lock().unwrap().insert(deployment_id.clone(), deployment);
+    DEPLOYMENTS.lock().unwrap().insert(deployment_id.clone(), deployment); // TODO: The lock can become poisoned if something panics and DEPLOYMENTS is locked
 
     send_log("INFO", &format!("Deployment created: {}", deployment_id), &func_name, None).await;
 
@@ -1110,6 +1111,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route("/deploy/{deployment_id}", web::delete().to(deployment_delete))
 
         // Create a new deployment with modules and optional mount/config data
-        .route("/deploy", web::post().to(deployment_create));
+        .route("/deploy", web::post().to(deployment_create))
+        .route("//deploy", web::post().to(deployment_create)); // This is needed for current version of orchestrator for some reason
 }
 

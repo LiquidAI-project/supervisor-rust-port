@@ -45,6 +45,7 @@ default = [
     "opencv", 
     "tokio/default", 
     "wasmtime/default", 
+    "wasmtime/async", 
     "wasmtime-wasi/default"
 ]
 
@@ -54,6 +55,7 @@ arm32 = [
     "tokio/macros", 
     "wasmtime/pulley", 
     "wasmtime/runtime", 
+    "wasmtime/async",
     "wasmtime-wasi/default"
 ]
 
