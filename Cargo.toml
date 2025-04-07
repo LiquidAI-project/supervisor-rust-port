@@ -42,11 +42,14 @@ wasmtime-wasi = { version = "29.0.1", optional = true, default-features = false 
 
 default = [
     "actix-web/default", 
-    "opencv", 
     "tokio/default", 
     "wasmtime/default", 
     "wasmtime/async", 
     "wasmtime-wasi/default"
+]
+
+camera = [
+    "opencv"
 ]
 
 arm32 = [

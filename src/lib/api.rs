@@ -748,7 +748,7 @@ pub async fn run_module_function(
         }
         #[cfg(feature = "arm32")]
         {
-            entry = make_history(entry); // fallback: sync exec
+            entry = make_history(entry).await; // fallback: sync exec
         }
     } else {
         entry = make_history(entry).await; // sync GET

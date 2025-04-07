@@ -2,11 +2,22 @@
 
 Rust version of the existing wasmiot supervisor (found in https://github.com/LiquidAI-project/wasmiot-supervisor)
 
-Currently in development. All functionality has been added, but remains untested.
+Currently in development. All functionality has been added, but remains partially untested.
 
-Compile with " cargo build --release "
+Full functionality requires a 64 bit device.
 
-Compile to arm32 (using cross) with " cross build --features=arm32 --no-default-features --target=armv7-unknown-linux-gnueabihf --release "
+Compile on your own device with "cargo build --release"
+
+Compile to 64-bit arm device with "cross build --target=aarch64-unknown-linux-musl --release"
+Note that camera support for arm devices wont work currently unless you compile the whole project on the device itself, in which case on devices with too little memory etc the compilation might just fail.
+
+Compiling to 32-bit armv7 devices can be done with:
+cross build --features=arm32 --no-default-features --target=armv7-unknown-linux-musleabihf --release
+
+Compiling to 32-bit armv6 devices is unsupported, but can be attempted with:
+cross build --features=arm32 --no-default-features --target=arm-unknown-linux-gnueabihf --release
+
+Note that serializing wasm modules for 32 bit devices doesnt seem to work at the moment, so while the supervisor can maybe run on one, it would be functionally useless.
 
 ## How to run
 

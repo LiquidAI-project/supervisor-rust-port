@@ -12,9 +12,9 @@
 
 use wasmtime::{Caller, Val, Result};
 use wasmtime_wasi::preview1::WasiP1Ctx;
-#[cfg(not(feature = "arm32"))]
+#[cfg(feature = "camera")]
 use std::env;
-#[cfg(not(feature = "arm32"))]
+#[cfg(feature = "camera")]
 use opencv::{
     prelude::*,
     videoio::{VideoCapture, VideoCaptureTrait, CAP_ANY},
@@ -45,7 +45,7 @@ use opencv::{
 /// 
 /// # Safety
 /// This function assumes Wasm has exported a linear memory named "memory".
-#[cfg(not(feature = "arm32"))]
+#[cfg(feature = "camera")]
 #[allow(non_snake_case)]
 pub fn takeImageDynamicSize(
     mut caller: Caller<'_, WasiP1Ctx>,
@@ -96,7 +96,7 @@ pub fn takeImageDynamicSize(
 /// # Returns
 /// * `Ok(())` if successful, or error if arguments or memory access fails
 #[allow(non_snake_case)]
-#[cfg(not(feature = "arm32"))]
+#[cfg(feature = "camera")]
 pub fn takeImageStaticSize(
     mut caller: Caller<'_, WasiP1Ctx>,
     args: &[Val],
@@ -142,7 +142,7 @@ pub fn takeImageStaticSize(
 /// - Camera not available
 /// - Capture failure
 /// - Frame is empty
-#[cfg(not(feature = "arm32"))]
+#[cfg(feature = "camera")]
 pub fn capture_image() -> Result<Mat, String> {
     let device = env::var("DEFAULT_CAMERA_DEVICE")
         .ok()
@@ -161,13 +161,13 @@ pub fn capture_image() -> Result<Mat, String> {
     Ok(frame)
 }
 
-#[cfg(feature = "arm32")]
+#[cfg(not(feature = "camera"))]
 pub fn capture_image() {
     ()
 }
 
 #[allow(non_snake_case)]
-#[cfg(feature = "arm32")]
+#[cfg(not(feature = "camera"))]
 pub fn takeImageDynamicSize(
     mut _caller: Caller<'_, WasiP1Ctx>,
     _args: &[Val],
@@ -177,7 +177,7 @@ pub fn takeImageDynamicSize(
 }
 
 #[allow(non_snake_case)]
-#[cfg(feature = "arm32")]
+#[cfg(not(feature = "camera"))]
 pub fn takeImageStaticSize(
     mut _caller: Caller<'_, WasiP1Ctx>,
     _args: &[Val],
