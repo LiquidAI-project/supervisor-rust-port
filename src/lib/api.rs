@@ -17,7 +17,7 @@
 //!   plus metadata like function chaining (instructions), input/output files (mounts),
 //!   and HTTP endpoint mappings.
 //!
-//! - **Execution Queue**: On non-ARM32 platforms, requests can be queued for background execution
+//! - **Execution Queue**: Requests are queued for background execution to here
 //!   (e.g. POST requests with large input files). A background thread (`wasm_worker`) continuously
 //!   pulls from this queue.
 //!
@@ -65,7 +65,6 @@ use crate::function_name;
 use crate::lib::deployment::{Deployment, EndpointArgs, ModuleEndpointMap, EndpointData, Endpoint};
 use crate::lib::wasmtime::{WasmtimeRuntime, ModuleConfig};
 use crate::lib::constants::{MODULE_FOLDER, PARAMS_FOLDER};
-#[cfg(not(feature = "arm32"))]
 use std::collections::VecDeque;
 
 /// Represents a failure to fetch one or more module binaries or data files.
@@ -79,8 +78,7 @@ pub struct FetchFailures {
 ///
 /// This queue is used to decouple incoming HTTP requests from actual Wasm execution, 
 /// enabling non-blocking behavior. Requests are enqueued and then picked up by a 
-/// background worker thread (`wasm_worker`). Only used if arm32 feature flag isnt enabled.
-#[cfg(not(feature = "arm32"))]
+/// background worker thread (`wasm_worker`).
 static WASM_QUEUE: Lazy<Mutex<VecDeque<RequestEntry>>> = Lazy::new(|| Mutex::new(VecDeque::new()));
 
 /// Global in-memory storage of active deployments.
@@ -412,9 +410,6 @@ pub async fn make_history(mut entry: RequestEntry) -> RequestEntry {
 /// - Passed into `make_history()` for execution and result tracking
 ///
 /// If no work is found, the thread sleeps briefly to avoid busy-waiting.
-///
-/// This is only compiled for platforms **not using `arm32`**, as the async queue model is not used there.
-#[cfg(not(feature = "arm32"))]
 pub fn wasm_worker() {
     loop {
         let mut queue = WASM_QUEUE.lock().unwrap();
@@ -425,19 +420,6 @@ pub fn wasm_worker() {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
     }
-}
-
-/// No-op fallback for the wasm worker thread on ARM32 platforms.
-///
-/// On devices like Raspberry Pi (arm32), request execution is handled synchronously.
-/// This function exists only to fulfill the interface; it does nothing.
-///
-/// # TODO
-/// Consider whether some lightweight task mechanism should exist for ARM platforms.
-#[cfg(feature = "arm32")]
-pub fn wasm_worker() {
-    // No-op: disabled on arm32
-    // TODO: Is something needed here?
 }
 
 /// Returns a machine-readable description of the device and supported Wasm host functions.
@@ -742,14 +724,7 @@ pub async fn run_module_function(
 
     // Handle GET (sync) or POST (enqueue async)
     if is_post {
-        #[cfg(not(feature = "arm32"))]
-        {
-            WASM_QUEUE.lock().unwrap().push_back(entry.clone());
-        }
-        #[cfg(feature = "arm32")]
-        {
-            entry = make_history(entry).await; // fallback: sync exec
-        }
+        WASM_QUEUE.lock().unwrap().push_back(entry.clone());
     } else {
         entry = make_history(entry).await; // sync GET
     }

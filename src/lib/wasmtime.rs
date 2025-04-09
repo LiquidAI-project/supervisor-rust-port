@@ -23,18 +23,19 @@ use std::path::PathBuf;
 use std::fs;
 use anyhow::Result;
 use wasmtime::{Config, Engine, Func, FuncType, Instance, Linker, Memory, MemoryAccessError, Module, Store, Val, ValType};
+#[cfg(not(feature="armv6"))]
 use wasmtime_wasi::preview1::{self, WasiP1Ctx};
+#[cfg(not(feature="armv6"))]
 use wasmtime_wasi::{WasiCtxBuilder, DirPerms, FilePerms};
 use log::{info, error};
 use crate::lib::wasmtime_imports;
+use crate::lib::constants::{SERIALIZED_MODULE_POSTFIX, PULLEY_MODULE_POSTFIX, MEMORY_NAME};
 use std::fmt;
 
 
 // ----------------------- Wasmtime Runtime related functionality ----------------------- //
 
-const SERIALIZED_MODULE_POSTFIX: &str = "SERIALIZED.wasm"; // Postfix to recognize serialized modules by
-const MEMORY_NAME: &str = "memory"; // Name of the memory related to each module
-
+#[cfg(not(feature="armv6"))]
 pub struct WasmtimeRuntime {
     pub engine: Engine,
     pub store: Store<WasiP1Ctx>,
@@ -43,6 +44,16 @@ pub struct WasmtimeRuntime {
     pub functions: Option<HashMap<String, WasmtimeModule>>,
 }
 
+#[cfg(feature="armv6")]
+pub struct WasmtimeRuntime {
+    pub engine: Engine,
+    pub store: Store<()>,
+    pub linker: Linker<()>,
+    pub modules: HashMap<String, WasmtimeModule>,
+    pub functions: Option<HashMap<String, WasmtimeModule>>,
+}
+
+#[cfg(not(feature="armv6"))]
 impl fmt::Debug for WasmtimeRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WasmtimeRuntime")
@@ -55,10 +66,23 @@ impl fmt::Debug for WasmtimeRuntime {
     }
 }
 
+#[cfg(feature="armv6")]
+impl fmt::Debug for WasmtimeRuntime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WasmtimeRuntime")
+            .field("engine", &"<Engine>")
+            .field("store", &"<Store<()>>")
+            .field("linker", &"<Linker<()>>")
+            .field("modules", &self.modules)
+            .field("functions", &self.functions)
+            .finish()
+    }
+}
+
 
 impl WasmtimeRuntime {
 
-
+    #[cfg(not(feature="armv6"))]
     /// Initializes a new wasmtime runtime
     pub async fn new(data_dirs: Vec<(String, String)>) -> Result<Self, Box<dyn std::error::Error>> {
         let mut config: Config = Config::default();
@@ -91,11 +115,34 @@ impl WasmtimeRuntime {
         Ok(runtime)
     }
 
+    #[cfg(feature = "armv6")]
+    /// Initializes a new wasmtime runtime in case that armv6 feature is enabled (no wasi-support etc)
+    pub async fn new(_data_dirs: Vec<(String, String)>) -> Result<Self, Box<dyn std::error::Error>> {
+        let engine = Engine::default();
+        let store = Store::new(&engine, ());
+        let linker = Linker::new(&engine);
+        let modules = HashMap::new();
+        let functions = None;
+        let mut runtime = Self {
+            engine,
+            store,
+            linker,
+            modules,
+            functions,
+        };
+        runtime.link_remote_functions().await;
+        Ok(runtime)
+    }
+
+
 
     pub async fn load_module(&mut self, config: ModuleConfig) -> Result<(), Box<dyn std::error::Error>>{
         if !self.modules.contains_key(&config.name){
             let module_name: String = config.name.clone();
+            #[cfg(not(feature = "armv6"))]
             let path_serial = config.path.clone().with_extension(SERIALIZED_MODULE_POSTFIX);
+            #[cfg(feature = "armv6")]
+            let path_serial = config.path.clone().with_extension(PULLEY_MODULE_POSTFIX);
             let should_compile: bool;
             if fs::metadata(&path_serial).is_ok() {
                 // Serialized version of the module exists already, check timestamps. If serialized version is older, recompile.
@@ -106,25 +153,28 @@ impl WasmtimeRuntime {
                 // Module should be serialized since the serialized version doesnt exist yet
                 should_compile = true; 
             }
-            #[cfg(not(feature = "arm32"))]
+            #[cfg(not(feature = "armv6"))]
             if should_compile {
                 // Compile and save a serialized version of the module
                 let module = wasmtime::Module::from_file(&self.engine, config.path.clone())?;
                 let module_bytes = module.serialize()?;
                 fs::write(&path_serial, module_bytes)?;
             }
-            #[cfg(feature = "arm32")]
+            #[cfg(feature = "armv6")]
             if should_compile {
                 // Compilation is not supported on arm32 targets
-                error!("Tried loading an unserialized module on arm32 device. This is not a supported operation. Loading module {} failed.", module_name);
-                return Err("Compilation is not supported on arm32 targets. Precompiled/serialized .wasm modules must be used.".into());
+                error!("Tried loading an unserialized module on armv6 device. This is not a supported operation. Loading module {} failed.", module_name);
+                return Err("Compilation is not supported on armv6 targets. Precompiled/serialized .wasm modules must be used.".into());
             }
             let deserialized_module = unsafe { 
                 // NOTE: The serialized module file being loaded can be tampered with, which could cause issues, which makes it unsafe.
                 // For more info: https://docs.wasmtime.dev/api/wasmtime/struct.Module.html#method.deserialize_file
                 wasmtime::Module::deserialize_file(&self.engine, &path_serial) 
             }?;
+            #[cfg(not(feature = "armv6"))]
             let instance = self.linker.instantiate_async(&mut self.store, &deserialized_module).await?;
+            #[cfg(feature = "armv6")]
+            let instance = self.linker.instantiate(&mut self.store, &deserialized_module)?;
             let mut wasmtime_module = WasmtimeModule::new(config)?;
             wasmtime_module.module = Some(deserialized_module);
             wasmtime_module.instance = Some(instance);
@@ -189,156 +239,26 @@ impl WasmtimeRuntime {
         // Camera related external functions
         /////////////////////////////////////////////////////////////////////
         
+        #[cfg(all(feature="camera", not(feature="armv6")))]
         let _ = &self.linker.func_new(
             "camera",
             "takeImageDynamicSize",
             FuncType::new(&self.engine, [ValType::I32, ValType::I32], []),
             wasmtime_imports::takeImageDynamicSize,
         );
+        #[cfg(all(feature="camera", not(feature="armv6")))]
         let _ = &self.linker.func_new(
             "camera",
             "takeImageStaticSize",
             FuncType::new(&self.engine, [ValType::I32, ValType::I32], []),
             wasmtime_imports::takeImageStaticSize,
         );
+        #[cfg(all(feature="camera", not(feature="armv6")))]
         let _ = &self.linker.func_new(
             "camera",
             "takeImage",
             FuncType::new(&self.engine, [ValType::I32, ValType::I32], []),
             wasmtime_imports::takeImage,
-        );
-
-        /////////////////////////////////////////////////////////////////////
-        // System related external functions (TODO: Functions are unimplemented)
-        /////////////////////////////////////////////////////////////////////
-
-        let _ = &self.linker.func_new(
-            "sys",
-            "millis",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::millis,
-        );
-        let _ = &self.linker.func_new(
-            "sys",
-            "delay",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::delay,
-        );
-        let _ = &self.linker.func_new(
-            "sys",
-            "pinMode",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::pinMode,
-        );
-        let _ = &self.linker.func_new(
-            "digitalWrite",
-            "millis",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::digitalWrite,
-        );
-        let _ = &self.linker.func_new(
-            "sys",
-            "getPinLED",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::getPinLED,
-        );
-        let _ = &self.linker.func_new(
-            "sys",
-            "getChipID",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::getChipID,
-        );
-        let _ = &self.linker.func_new(
-            "sys",
-            "print",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::print,
-        );
-        let _ = &self.linker.func_new(
-            "sys",
-            "printInt",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::printInt,
-        );
-        let _ = &self.linker.func_new(
-            "sys",
-            "printFloat",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::printFloat,
-        );
-
-        /////////////////////////////////////////////////////////////////////
-        // Wifi related external functions (TODO: Functions are unimplemented)
-        /////////////////////////////////////////////////////////////////////
-
-        let _ = &self.linker.func_new(
-            "wifi",
-            "wifiConnect",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::wifiConnect,
-        );
-        let _ = &self.linker.func_new(
-            "wifi",
-            "wifiStatus",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::wifiStatus,
-        );
-        let _ = &self.linker.func_new(
-            "wifi",
-            "wifiLocalIp",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::wifiLocalIp,
-        );
-        let _ = &self.linker.func_new(
-            "wifi",
-            "printWifiLocalIp",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::printWifiLocalIp,
-        );
-
-        /////////////////////////////////////////////////////////////////////
-        // Communication related external functions (TODO: Functions are unimplemented)
-        /////////////////////////////////////////////////////////////////////
-
-        let _ = &self.linker.func_new(
-            "communication",
-            "rpcCall",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::rpcCall,
-        );
-
-        /////////////////////////////////////////////////////////////////////
-        // http related external functions (TODO: Functions are unimplemented)
-        /////////////////////////////////////////////////////////////////////
-
-        let _ = &self.linker.func_new(
-            "http",
-            "httpPost",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::httpPost,
-        );
-        let _ = &self.linker.func_new(
-            "http",
-            "http_post",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::http_post,
-        );
-        
-        /////////////////////////////////////////////////////////////////////
-        // dht related external functions (TODO: Functions are unimplemented)
-        /////////////////////////////////////////////////////////////////////
-
-        let _ = &self.linker.func_new(
-            "dht",
-            "readTemperature",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::readTemperature,
-        );
-        let _ = &self.linker.func_new(
-            "dht",
-            "readHumidity",
-            FuncType::new(&self.engine, [], []),
-            wasmtime_imports::readHumidity,
         );
 
     }
@@ -401,7 +321,12 @@ impl WasmtimeRuntime {
         info!("Attempting to run function {} from module {}...", func_name, module_name);
         let _ = match &self.get_function(module_name, func_name).await {
             Some(func) => {
-                func.call_async(&mut self.store, params_thingy, returns_thingy).await
+                #[cfg(not(feature="armv6"))]
+                {
+                    func.call_async(&mut self.store, params_thingy, returns_thingy).await
+                }
+                #[cfg(feature="armv6")]
+                func.call(&mut self.store, params_thingy, returns_thingy)
             }
             None => {
                 error!("Failed to run function {} from module {}.", func_name, module_name);

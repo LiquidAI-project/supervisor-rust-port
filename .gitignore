@@ -14,3 +14,4 @@ venv
 .env
 instance/wasm-modules/*
 instance/wasm-params/*
+.vscode

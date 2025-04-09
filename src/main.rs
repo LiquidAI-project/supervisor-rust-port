@@ -1,9 +1,6 @@
 //! # Supervisor Entry Point
 //!
 //! This is the main executable entry point for the Wasmiot supervisor.
-//! 
-//! Due to possible hardware constraints, ARM32 version does **not** spawn a separate background thread
-//! for WebAssembly execution, and limits Actix-Web to a single worker thread.
 //!
 //! This performs the following startup tasks:
 //! - Initializes loggers and instance directories
@@ -43,34 +40,18 @@ async fn main() -> std::io::Result<()> {
     info!("host:{}, port:{}", host, port);
 
     // Launch the background WebAssembly execution thread
-    #[cfg(not(feature = "arm32"))]
-    {
-        std::thread::spawn(|| {
-            api::wasm_worker();
-        });
-    }
+    std::thread::spawn(|| {
+        api::wasm_worker();
+    });
 
     // Wait for the server to be ready before advertising over Zeroconf
     zeroconf::wait_until_ready_and_register(zc);
 
-    // Initialize the HTTP server. Limit worker threads if using arm32 version.
-    #[cfg(not(feature = "arm32"))]
-    {
-        let server = HttpServer::new(move || {
-            App::new().wrap(actix_web::middleware::Logger::default()).configure(api::configure_routes)
-        })
-        .bind(("0.0.0.0", port))?;
-        info!("Starting supervisor service at http://{}:{}/", host, port);
-        server.run().await
-    }
-    #[cfg(feature = "arm32")]
-    {
-        let server = HttpServer::new(move || {
-            App::new().configure(api::configure_routes)
-        })
-        .workers(1)
-        .bind(("0.0.0.0", port))?;
-        info!("Starting supervisor service at http://{}:{}/", host, port);
-        server.run().await
-    }
+    // Initialize the HTTP server.
+    let server = HttpServer::new(move || {
+        App::new().wrap(actix_web::middleware::Logger::default()).configure(api::configure_routes)
+    })
+    .bind(("0.0.0.0", port))?;
+    info!("Starting supervisor service at http://{}:{}/", host, port);
+    server.run().await
 }

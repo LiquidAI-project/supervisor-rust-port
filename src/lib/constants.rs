@@ -51,47 +51,19 @@ pub static MODULE_FOLDER: Lazy<PathBuf> = Lazy::new(|| INSTANCE_PATH.join(MODULE
 /// This is derived from the `INSTANCE_PATH` and `PARAMS_FOLDER_NAME`.
 pub static PARAMS_FOLDER: Lazy<PathBuf> = Lazy::new(|| INSTANCE_PATH.join(PARAMS_FOLDER_NAME));
 
+#[cfg(all(feature="camera", not(feature="armv6")))]
 /// The predefined list of supported interfaces for wasm modules.
 ///
 /// These refer to function names the supervisor imports into each wasm module.
-/// Most of these arent actually implemented but are here for compatibility reasons.
-pub const SUPERVISOR_INTERFACES: [&str; 36] = [
-    "millis",
-    "delay",
-    "print",
-    "println",
-    "printInt",
-    "rpcCall",
-    "takeImage",
+pub const SUPERVISOR_INTERFACES: [&str; 3] = [
     "takeImageDynamicSize", // This is actually implemented
     "takeImageStaticSize", // This is actually implemented
-    "path_open",
-    "fd_filestat_get",
-    "fd_read",
-    "fd_readdir",
-    "fd_seek",
-    "fd_write",
-    "fd_close",
-    "fd_prestat_get",
-    "fd_prestat_dir_name",
-    "sched_yield",
-    "random_get",
-    "proc_exit",
-    "environ_sizes_get",
-    "environ_get",
-    "pinMode",
-    "digitalWrite",
-    "getPinLED",
-    "getChipID",
-    "printFloat",
-    "wifiConnect",
-    "wifiStatus",
-    "wifiLocalIp",
-    "printWifiLocalIp",
-    "httpPost",
-    "http_post",
-    "readTemperature",
-    "readHumidity"
+    "takeImage" // Not implemented but required to run camera module currently
+];
+
+/// List of supervisor interfaces when camera flag isnt enabled OR armv6 feature is enabled
+#[cfg(any(not(feature="camera"), feature="armv6"))]
+pub const SUPERVISOR_INTERFACES: [&str; 0] = [
 ];
 
 /// List of media types considered valid for file-based inputs and outputs.
@@ -106,6 +78,15 @@ pub const FILE_TYPES: [&str; 7] = [
     "text/html",
     "text/javascript"
 ];
+
+// Postfix to recognize serialized modules by
+pub const SERIALIZED_MODULE_POSTFIX: &str = "SERIALIZED.wasm"; 
+
+// Postfix to recognize modules that have specifically been serialized for pulley
+pub const PULLEY_MODULE_POSTFIX: &str = "PULLEY.wasm"; 
+
+// Name of the memory related to each module
+pub const MEMORY_NAME: &str = "memory"; 
 
 /// Ensures that all required directories for modules and parameter mounts exist.
 ///
