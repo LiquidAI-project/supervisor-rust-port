@@ -333,6 +333,7 @@ impl WasmtimeRuntime {
                 Ok(())
             }
         };
+        info!("Ran module {:?} with function {:?} with params {:?}, result was {:?}.", module_name, func_name, params, returns_thingy.to_vec());
         return returns_thingy.to_vec();
     }
 

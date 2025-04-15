@@ -9,6 +9,7 @@
 //! - Spawns a background worker thread for executing WebAssembly tasks asynchronously
 
 use actix_web::{App, HttpServer};
+use actix_cors::Cors;
 use log::{info, warn};
 use supervisor::lib::{api, zeroconf, constants};
 
@@ -39,17 +40,23 @@ async fn main() -> std::io::Result<()> {
     let (host, port) = (zc.host.clone(), zc.port);
     info!("host:{}, port:{}", host, port);
 
-    // Launch the background WebAssembly execution thread
-    std::thread::spawn(|| {
-        api::wasm_worker();
-    });
-
     // Wait for the server to be ready before advertising over Zeroconf
     zeroconf::wait_until_ready_and_register(zc);
 
     // Initialize the HTTP server.
     let server = HttpServer::new(move || {
-        App::new().wrap(actix_web::middleware::Logger::default()).configure(api::configure_routes)
+        App::new()
+        .wrap(
+            Cors::default()
+                .allow_any_origin() // Or .allowed_origin("http://localhost:3314")
+                .allow_any_method()
+                .allow_any_header()
+                .max_age(3600)
+        )
+        .wrap(
+            actix_web::middleware::Logger::default()
+        )
+        .configure(api::configure_routes)
     })
     .bind(("0.0.0.0", port))?;
     info!("Starting supervisor service at http://{}:{}/", host, port);

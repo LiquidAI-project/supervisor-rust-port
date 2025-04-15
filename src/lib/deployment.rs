@@ -74,8 +74,11 @@ pub struct MountPathFile {
     pub path: String,
     pub media_type: String,
     pub stage: MountStage,
+    #[serde(default = "default_required")]
     pub required: bool,
+    #[serde(default = "default_encoding")]
     pub encoding: String,
+    #[serde(default = "default_type")]
     pub r#type: String,
 }
 
@@ -105,6 +108,17 @@ impl MountPathFile {
     pub fn validate(&self, x: HashMap<String, Value>) -> HashMap<String, Value> {
         x
     }
+}
+
+// Helper default functions for serde
+fn default_required() -> bool {
+    true
+}
+fn default_encoding() -> String {
+    "base64".to_string()
+}
+fn default_type() -> String {
+    "string".to_string()
 }
 
 /// Represents the high-level type of a schema field (OpenAPI-compatible).
@@ -178,7 +192,7 @@ pub struct Schema {
     pub format: Option<SchemaFormat>,
 
     /// Optional nested object properties (used for structured types)
-    pub properties: Option<HashMap<String, Value>>,
+    pub properties: Option<HashMap<String, HashMap<String, String>>>,
 }
 
 impl Schema {
@@ -186,7 +200,7 @@ impl Schema {
     pub fn new<T: Into<SchemaType>, F: Into<Option<String>>>(
         r#type: T,
         format: F,
-        properties: Option<HashMap<String, Value>>,
+        properties: Option<HashMap<String, HashMap<String, String>>>,
     ) -> Self {
         let format_option: Option<SchemaFormat> = format.into().map(SchemaFormat::from);
         Schema {
@@ -225,7 +239,7 @@ pub struct MediaTypeObject {
     pub schema: Schema,
 
     /// Optional encoding hints (e.g. base64, gzip, etc.)
-    pub encoding: Option<HashMap<String, String>>,
+    pub encoding: Option<HashMap<String, HashMap<String, String>>>,
 }
 
 impl MediaTypeObject {
@@ -233,7 +247,7 @@ impl MediaTypeObject {
     pub fn new<S: Into<Schema>>(
         media_type: String,
         schema: S,
-        encoding: Option<HashMap<String, String>>,
+        encoding: Option<HashMap<String, HashMap<String, String>>>,
     ) -> Self {
         MediaTypeObject {
             media_type,
@@ -395,17 +409,18 @@ impl Endpoint {
 /// - Encoding content-type must be a supported file type
 pub fn get_supported_file_schemas(
     schema: &Schema,
-    encoding: &Option<HashMap<String, String>>,
-) -> Vec<(String, Value)> {
+    encoding: &Option<HashMap<String, HashMap<String, String>>>,
+) -> Vec<(String, HashMap<String, String>)> {
     if let Some(props) = &schema.properties {
         props
             .iter()
             .filter(|(path, sub_schema)| {
-                sub_schema.get("type").and_then(|t| t.as_str()) == Some("string")
-                    && sub_schema.get("format").and_then(|f| f.as_str()) == Some("binary")
+                sub_schema.get("type").map(String::as_str) == Some("string")
+                    && sub_schema.get("format").map(String::as_str) == Some("binary")
                     && encoding
                         .as_ref()
                         .and_then(|enc| enc.get(*path))
+                        .and_then(|map| map.get("contentType"))
                         .map(|ctype| FILE_TYPES.contains(&ctype.as_str()))
                         .unwrap_or(false)
             })
@@ -542,10 +557,16 @@ impl CallData {
 
         let file_list = files.unwrap_or_else(|| EndpointData::StrList(vec![]));
 
+        // Force POST if files are present in the request
+        let method = match &file_list {
+            EndpointData::StrList(list) if !list.is_empty() => "POST".to_string(),
+            _ => endpoint.method.clone(),
+        };
+
         CallData {
             url,
             headers,
-            method: endpoint.method.clone(),
+            method,
             files: file_list,
         }
     }

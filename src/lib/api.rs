@@ -74,13 +74,6 @@ pub struct FetchFailures {
     pub errors: Vec<Value>,
 }
 
-/// Global queue holding WebAssembly execution tasks to be processed asynchronously.
-///
-/// This queue is used to decouple incoming HTTP requests from actual Wasm execution, 
-/// enabling non-blocking behavior. Requests are enqueued and then picked up by a 
-/// background worker thread (`wasm_worker`).
-static WASM_QUEUE: Lazy<Mutex<VecDeque<RequestEntry>>> = Lazy::new(|| Mutex::new(VecDeque::new()));
-
 /// Global in-memory storage of active deployments.
 ///
 /// Maps a deployment ID to its corresponding `Deployment` struct,
@@ -346,15 +339,28 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
             ).await;
         });
 
+        drop(deployments);
+
+        let mut form = reqwest::multipart::Form::new();
+
+        for (name, mut file) in files {
+            let mut buf = Vec::new();
+            use std::io::Read;
+            file.read_to_end(&mut buf).map_err(|e| format!("Failed to read file for multipart: {}", e))?;
+
+            form = form.part(name.clone(), reqwest::multipart::Part::bytes(buf).file_name(name));
+        }
+
         let client = reqwest::Client::new();
         let response = client
             .request(call_data.method.parse().unwrap_or(reqwest::Method::POST), &call_data.url)
             .headers(headers)
+            .multipart(form)
             .send()
             .await
             .map_err(|e| format!("Failed to send chained request: {}", e))?;
 
-        return response.json().await.map_err(|e| format!("Invalid response JSON: {}", e));
+        return response.json().await.map_err(|e| format!("Invalid response JSON from {}: {}", call_data.url, e));
     }
 
     Ok(json!({ "result": entry.result }))
@@ -401,25 +407,6 @@ pub async fn make_history(mut entry: RequestEntry) -> RequestEntry {
 
     REQUEST_HISTORY.lock().unwrap().push(entry.clone());
     entry
-}
-
-/// Worker thread that continuously consumes and executes requests from the Wasm execution queue.
-///
-/// This function runs in a loop and checks for queued `RequestEntry` objects. If one is found:
-/// - It is dequeued
-/// - Passed into `make_history()` for execution and result tracking
-///
-/// If no work is found, the thread sleeps briefly to avoid busy-waiting.
-pub fn wasm_worker() {
-    loop {
-        let mut queue = WASM_QUEUE.lock().unwrap();
-        if let Some(entry) = queue.pop_front() {
-            drop(queue); // Release lock before doing expensive work
-            make_history(entry);
-        } else {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-    }
 }
 
 /// Returns a machine-readable description of the device and supported Wasm host functions.
@@ -722,12 +709,7 @@ pub async fn run_module_function(
         ).await;
     });
 
-    // Handle GET (sync) or POST (enqueue async)
-    if is_post {
-        WASM_QUEUE.lock().unwrap().push_back(entry.clone());
-    } else {
-        entry = make_history(entry).await; // sync GET
-    }
+    entry = make_history(entry).await;
     let http_scheme = env::var("DEFAULT_URL_SCHEME").unwrap_or_else(|_| {
         error!("Failed to read DEFAULT_URL_SCHEME from enviroment variables, defaulting to 'http'.");
         "http".to_string()

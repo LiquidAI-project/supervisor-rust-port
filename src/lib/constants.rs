@@ -51,20 +51,81 @@ pub static MODULE_FOLDER: Lazy<PathBuf> = Lazy::new(|| INSTANCE_PATH.join(MODULE
 /// This is derived from the `INSTANCE_PATH` and `PARAMS_FOLDER_NAME`.
 pub static PARAMS_FOLDER: Lazy<PathBuf> = Lazy::new(|| INSTANCE_PATH.join(PARAMS_FOLDER_NAME));
 
-#[cfg(all(feature="camera", not(feature="armv6")))]
-/// The predefined list of supported interfaces for wasm modules.
-///
-/// These refer to function names the supervisor imports into each wasm module.
-pub const SUPERVISOR_INTERFACES: [&str; 3] = [
-    "takeImageDynamicSize", // This is actually implemented
-    "takeImageStaticSize", // This is actually implemented
-    "takeImage" // Not implemented but required to run camera module currently
+/// Functions provided for the camera module
+pub const CAMERA_FUNCTIONS: &[&str] = &[
+    "takeImageDynamicSize",
+    "takeImageStaticSize",
+    "takeImage"
 ];
 
-/// List of supervisor interfaces when camera flag isnt enabled OR armv6 feature is enabled
-#[cfg(any(not(feature="camera"), feature="armv6"))]
-pub const SUPERVISOR_INTERFACES: [&str; 0] = [
+/// Functions provided by wasip1 for use by modules compiled for wasm32-wasip1 target
+pub const WASI_FUNCTIONS: &[&str] = &[
+    "args_get",
+    "args_sizes_get",
+    "environ_get",
+    "environ_sizes_get",
+    "clock_res_get",
+    "clock_time_get",
+    "fd_advise",
+    "fd_allocate",
+    "fd_close",
+    "fd_datasync",
+    "fd_fdstat_get",
+    "fd_fdstat_set_flags",
+    "fd_fdstat_set_rights",
+    "fd_filestat_get",
+    "fd_filestat_set_size",
+    "fd_filestat_set_times",
+    "fd_pread",
+    "fd_prestat_get",
+    "fd_prestat_dir_name",
+    "fd_pwrite",
+    "fd_read",
+    "fd_readdir",
+    "fd_renumber",
+    "fd_seek",
+    "fd_sync",
+    "fd_tell",
+    "fd_write",
+    "path_create_directory",
+    "path_filestat_get",
+    "path_filestat_set_times",
+    "path_link",
+    "path_open",
+    "path_readlink",
+    "path_remove_directory",
+    "path_rename",
+    "path_symlink",
+    "path_unlink_file",
+    "poll_oneoff",
+    "proc_exit",
+    "proc_raise",
+    "sched_yield",
+    "random_get",
+    "sock_accept",
+    "sock_recv",
+    "sock_send",
+    "sock_shutdown"
 ];
+
+/// The list of supervisor interfaces imported into WASM modules.
+/// Generated based on enabled features.
+pub static SUPERVISOR_INTERFACES: Lazy<Vec<&'static str>> = Lazy::new(|| {
+    let mut interfaces = Vec::new();
+
+    #[cfg(all(feature = "camera", not(feature = "armv6")))]
+    {
+        // Camera functions are only available with camera feature flag, but not on armv6 architecture currently
+        interfaces.extend_from_slice(CAMERA_FUNCTIONS);
+    }
+    #[cfg(not(feature = "armv6"))] 
+    {
+        // Wasi functionalities are not available on armv6 architecture
+        interfaces.extend_from_slice(WASI_FUNCTIONS);
+    }
+
+    interfaces
+});
 
 /// List of media types considered valid for file-based inputs and outputs.
 ///
