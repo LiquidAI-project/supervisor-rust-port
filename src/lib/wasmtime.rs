@@ -239,21 +239,18 @@ impl WasmtimeRuntime {
         // Camera related external functions
         /////////////////////////////////////////////////////////////////////
         
-        #[cfg(all(feature="camera", not(feature="armv6")))]
         let _ = &self.linker.func_new(
             "camera",
             "takeImageDynamicSize",
             FuncType::new(&self.engine, [ValType::I32, ValType::I32], []),
             wasmtime_imports::takeImageDynamicSize,
         );
-        #[cfg(all(feature="camera", not(feature="armv6")))]
         let _ = &self.linker.func_new(
             "camera",
             "takeImageStaticSize",
             FuncType::new(&self.engine, [ValType::I32, ValType::I32], []),
             wasmtime_imports::takeImageStaticSize,
         );
-        #[cfg(all(feature="camera", not(feature="armv6")))]
         let _ = &self.linker.func_new(
             "camera",
             "takeImage",

@@ -113,11 +113,9 @@ pub const WASI_FUNCTIONS: &[&str] = &[
 pub static SUPERVISOR_INTERFACES: Lazy<Vec<&'static str>> = Lazy::new(|| {
     let mut interfaces = Vec::new();
 
-    #[cfg(all(feature = "camera", not(feature = "armv6")))]
-    {
-        // Camera functions are only available with camera feature flag, but not on armv6 architecture currently
-        interfaces.extend_from_slice(CAMERA_FUNCTIONS);
-    }
+    // Camera functionality is available for all architectures supported by supervisor
+    interfaces.extend_from_slice(CAMERA_FUNCTIONS);
+
     #[cfg(not(feature = "armv6"))] 
     {
         // Wasi functionalities are not available on armv6 architecture

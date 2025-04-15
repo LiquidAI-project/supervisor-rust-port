@@ -2,22 +2,14 @@
 
 Rust version of the existing wasmiot supervisor (found in https://github.com/LiquidAI-project/wasmiot-supervisor)
 
-Currently in testing phase. Works for simple setups. Full functionality requires a 64bit device, but limited version can be compiled for 32bit armv6 architectures as well by enabling the "armv6" feature flag.
+Currently in testing phase. Works for simple setups. Full functionality requires a 64bit device, but limited version (missing wasmtime_wasi) can be compiled for 32bit armv6 architectures as well by enabling the "armv6" feature flag. 
 
 ## Features
-
-### Camera functionality
-Can be enabled by adding ```--features=camera``` at the end when running or compiling with cargo/cross. Wont currently work for crosscompilations. Also requires some or all of following packages to be installed on the target device:
-- pkg-config 
-- libopencv-dev 
-- clang 
-- libclang-dev
 
 ### armv6
 This feature enables cross-compiling for devices with armv6 architecture, such as Raspberry Pi 1 and Zero. Enabled by adding ```--no-default-features --features=armv6``` at the end when running or compiling with cargo/cross.
 
-### armv7
-TODO
+Modules need to be serialized in advance to work on armv6 devices. This can be done by putting modules into pulley32/pulley_modules_input folder, running the compile_modules.sh, and then using the serialized modules stored in pulley_modules_output folder in the orchestrator instead of the original .wasm files.
 
 ## Development
 

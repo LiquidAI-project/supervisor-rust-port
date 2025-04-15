@@ -15,15 +15,15 @@ services:
       default:
         ipv4_address: 172.15.0.25
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 1m30s
       timeout: 30s
       retries: 3
       start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 250M
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 250M
 
 networks:
   default:
@@ -34,51 +34,3 @@ networks:
       driver: default
       config:
         - subnet: 172.15.0.0/24
-
-# networks:
-#   wasmiot-net:
-#     external: true
-#     ipv4_address: 172.15.0.50
-
-
-
-#       # Supervisor Base Service
-#   device-base:
-#     profiles:
-#       - ABSTRACT_BASE_HACK_DO_NOT_USE
-#     image: ghcr.io/liquidai-project/wasmiot-supervisor
-#     volumes:
-#       - type: bind
-#         source: ./wasmiot-supervisor/host_app
-#         target: /app/host_app
-#     env_file:
-#       - .env
-#     # links:
-#     #   - orchestrator
-#     healthcheck:
-#       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-#       interval: 1m30s
-#       timeout: 30s
-#       retries: 3
-#       start_period: 30s
-
-
-
-  # raspi1:
-  #   extends: device-base
-  #   profiles:
-  #     - device
-  #   environment:
-  #     - DEVICE_TYPE=RaspberryPi-with-camera
-  #     - FLASK_APP=raspi1
-  #     - WASMIOT_SUPERVISOR_IP=172.15.0.21
-  #   ports:
-  #     - 3001:5000
-  #   privileged: true
-  #   volumes:
-  #     - ./devices/raspi1/configs:/app/instance/configs
-  #     - ./devices/raspi1/modules:/app/instance/modules
-  #     - ./devices/raspi1/output:/app/instance/output
-  #   networks:
-  #     default:
-  #       ipv4_address: 172.15.0.21
