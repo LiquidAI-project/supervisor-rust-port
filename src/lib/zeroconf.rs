@@ -12,7 +12,6 @@
 
 
 use serde::Serialize;
-use zeroconf::avahi::event_loop::AvahiEventLoop;
 use std::env;
 use std::net::TcpStream;
 use std::thread;
@@ -37,9 +36,11 @@ use zeroconf::{MdnsService, ServiceType, TxtRecord};
 /// - Name and service type (e.g. `_webthing._tcp`)
 /// - Host IP and port
 /// - Optional service metadata (`properties`) such as TLS info
+#[derive(Debug, Serialize, Clone)]
 pub struct WebthingZeroconf {
     pub service_name: String,
     pub service_type: String,
+    pub service_protocol: String,
     pub host: String,
     pub port: u16,
     pub properties: Vec<(String, String)>,
@@ -53,7 +54,6 @@ impl WebthingZeroconf {
     /// service type.
     pub fn new() -> Self {
         let (host, port) = get_listening_address();
-
         let preferred_url_scheme = env::var("PREFERRED_URL_SCHEME")
             .unwrap_or_else(|_| DEFAULT_URL_SCHEME.to_string());
         let tls_flag = if preferred_url_scheme.to_lowercase() == "https" {
@@ -62,18 +62,21 @@ impl WebthingZeroconf {
             "0"
         };
 
-        let service_type = "_webthing._tcp".to_string();
+        // service name = supervisor._webthing._tcp.local.
+        let service_type = "webthing".to_string();
+        let service_protocol = "tcp".to_string();
         let service_name = env::var("SUPERVISOR_NAME")
-            .unwrap_or_else(|_| SUPERVISOR_DEFAULT_NAME.to_string());
+            .unwrap_or_else(|_| SUPERVISOR_DEFAULT_NAME.to_string())
+            + "._" + &service_type + "._" + &service_protocol + ".local.";
 
         let properties = vec![
             ("path".to_string(), "/".to_string()),
             ("tls".to_string(), tls_flag.to_string()),
         ];
-
         WebthingZeroconf {
             service_name,
             service_type,
+            service_protocol,
             host,
             port,
             properties,
@@ -82,7 +85,7 @@ impl WebthingZeroconf {
 }
 
 /// Payload structure used when sending service registration info to orchestrator.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct ZeroconfRegistrationData<'a> {
     #[serde(rename = "name")]
     name: &'a str,
@@ -94,7 +97,48 @@ pub struct ZeroconfRegistrationData<'a> {
     host: String,
 }
 
+/// Force registration of the supervisor to orchestrator.
+/// Spawns a background thread that waits for the supervisor is ready
+/// before sending the registration to orchestrator.
+/// Requires the following env variables to be set in .env file:
+///   - WASMIOT_ORCHESTRATOR_URL
+pub fn force_supervisor_registration(zc: WebthingZeroconf) {
+        thread::spawn(move || {
+        let addr = format!("{}:{}", zc.host, zc.port);
+
+        loop {
+            match TcpStream::connect(&addr) {
+                Ok(_) => {
+                    debug!("Server is ready at {}", addr);
+                    break;
+                }
+                Err(err) => {
+                    debug!("Waiting for server at {}: {:?}", addr, err);
+                    thread::sleep(Duration::from_secs(1));
+                }
+            }
+        }
+
+        if let Ok(mut orchestrator_url) = env::var("WASMIOT_ORCHESTRATOR_URL") {
+            orchestrator_url.push_str(URL_BASE_PATH);
+
+            let result = System::new().block_on(async {
+                register_services_to_orchestrator(&zc, &orchestrator_url).await
+            });
+
+            if let Err(e) = result {
+                error!("Failed to register to orchestrator: {}", e);
+            }
+        } else {
+            debug!("No WASMIOT_ORCHESTRATOR_URL set, skipping orchestrator registration.");
+        }
+
+    });
+
+}
+
 /// Sends a service registration POST request to the orchestrator.
+/// This is the "manual" version of device discovery
 ///
 /// Converts the `WebthingZeroconf` instance into the proper payload and sends it
 /// to the configured `orchestrator_url`. Logs and returns errors if any occur.
@@ -143,11 +187,11 @@ pub async fn register_services_to_orchestrator(
     Ok(())
 }
 
-/// Waits for the local supervisor server to be up, then registers the service.
+/// Waits for supervisor to be up, the starts listening to mdns requests
 ///
 /// Spawns a background thread that:
-/// - Repeatedly tries to connect to the server address
-/// - Once reachable, attempts orchestrator registration (if env var is set)
+/// - Repeatedly tries to connect to the supervisor
+/// - Once supervisor is reachable, starts listening to mdns requests from the orchestrator
 pub fn wait_until_ready_and_register(zc: WebthingZeroconf) {
     thread::spawn(move || {
         let addr = format!("{}:{}", zc.host, zc.port);
@@ -167,39 +211,25 @@ pub fn wait_until_ready_and_register(zc: WebthingZeroconf) {
 
         // Advertise the service using mDNS
         // print the error if it fails
-        if let Err(e) = register_service(&zc) {
-            error!("Failed to register service with mDNS: {}", e);
+        if let Err(e) = register_service(zc) {
+            error!("Failed to start mDNS listener: {}", e);
         } else {
-            info!("Service registered with mDNS successfully.");
+            info!("Mdns listener started succesfully.");
         }
 
-        if let Ok(mut orchestrator_url) = env::var("WASMIOT_ORCHESTRATOR_URL") {
-            orchestrator_url.push_str(URL_BASE_PATH);
 
-            let result = System::new().block_on(async {
-                register_services_to_orchestrator(&zc, &orchestrator_url).await
-            });
-
-            if let Err(e) = result {
-                error!("Failed to register to orchestrator: {}", e);
-            }
-        } else {
-            debug!("No WASMIOT_ORCHESTRATOR_URL set, skipping orchestrator registration.");
-        }
     });
 }
 
 /// Determines the IP address and port this supervisor instance should bind to.
-///
+/// Defaults to 127.0.0.1 and port 8080
+/// 
 /// Reads:
-/// - `WASMIOT_SUPERVISOR_IP` (falls back to local IP or `127.0.0.1`)
 /// - `WASMIOT_SUPERVISOR_PORT` (falls back to default 8080)
 pub fn get_listening_address() -> (String, u16) {
-    let host = env::var("WASMIOT_SUPERVISOR_IP").unwrap_or_else(|_| {
-        local_ip_address::local_ip()
+    let host = local_ip_address::local_ip()
             .map(|ip| ip.to_string())
-            .unwrap_or_else(|_| "127.0.0.1".to_string())
-    });
+            .unwrap_or_else(|_| "127.0.0.1".to_string());
 
     let port_str = env::var("WASMIOT_SUPERVISOR_PORT")
         .unwrap_or_else(|_| DEFAULT_PORT.to_string());
@@ -208,21 +238,31 @@ pub fn get_listening_address() -> (String, u16) {
     (host, port)
 }
 
-fn register_service(zc: &WebthingZeroconf) -> anyhow::Result<AvahiEventLoop> {
-    // let sub_types = sub_types.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-    let service_type_parts = zc.service_type.split('.').collect::<Vec<_>>();
-    let service_type = ServiceType::new(service_type_parts[0], service_type_parts[1])?;
-    let mut service = MdnsService::new(service_type.clone(), zc.port);
-    let mut txt_record = TxtRecord::new();
-    zc.properties
-        .iter()
-        .for_each(|(key, value)| {
-            txt_record.insert(key, value).unwrap();
-        });
+/// Spawn a separate thread that continously listens for mdns requests, and 
+/// responds with supervisor data when requested.
+pub fn register_service(zc: WebthingZeroconf) -> anyhow::Result<()> {
+    std::thread::spawn(move || {
+        let service_type = ServiceType::new(zc.service_type.as_str(), zc.service_protocol.as_str()).unwrap();
+        let mut service = MdnsService::new(service_type, zc.port);
+        let mut txt_record = TxtRecord::new();
+        zc.properties
+            .iter()
+            .for_each(|(key, value)| {
+                txt_record.insert(key, value).unwrap();
+            });
+        service.set_name(&zc.service_name);
+        service.set_txt_record(txt_record);
 
-    service.set_name(&zc.service_name);
-    service.set_txt_record(txt_record);
-    service.set_host(&zc.host);
+        service.set_registered_callback(Box::new(|r, _| {
+            if let Ok(svc) = r {
+                info!("✅ Responded to mdns query with: {:?}", svc);
+            }
+        }));
 
-    Ok(service.register()?)
+        let event_loop = service.register().unwrap();
+        loop {
+            event_loop.poll(Duration::from_secs(0)).unwrap();
+        }
+    });
+    Ok(())
 }

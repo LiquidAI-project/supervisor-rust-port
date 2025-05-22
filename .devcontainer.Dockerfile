@@ -15,7 +15,11 @@ RUN apt-get update && apt-get install -y \
     libxcb-xfixes0-dev \
     clang \
     avahi-daemon \
-    libavahi-client-dev
+    libavahi-client-dev \
+    dbus
+
+RUN mkdir -p /run/dbus
+RUN rm -rf /run/dbus/*
 
 # Create video group if it doesn't exist and add vscode user to it to allow camera-access
 RUN groupadd -r video || true && usermod -aG video vscode

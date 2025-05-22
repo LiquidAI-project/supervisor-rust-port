@@ -39,6 +39,7 @@ async fn main() -> std::io::Result<()> {
     let zc = zeroconf::WebthingZeroconf::new();
     let (host, port) = (zc.host.clone(), zc.port);
     info!("host:{}, port:{}", host, port);
+    std::env::set_var("WASMIOT_SUPERVISOR_IP", &host);
 
     // Wait for the server to be ready before advertising over Zeroconf
     zeroconf::wait_until_ready_and_register(zc);
