@@ -6,11 +6,13 @@
 //! - Determining the local host and port the supervisor is running on
 //! - Building and managing a service identity (`WebthingZeroconf`)
 //! - Registering that service with a remote orchestrator, if configured
+//! - Advertising the service with mDNS
 //!
 //! This allows services to self-register into the orchestrator.
 
 
 use serde::Serialize;
+use zeroconf::avahi::event_loop::AvahiEventLoop;
 use std::env;
 use std::net::TcpStream;
 use std::thread;
@@ -20,11 +22,13 @@ use log::{error, debug, info};
 use local_ip_address;
 use actix_web::rt::System;
 use crate::lib::constants::{
-    DEFAULT_URL_SCHEME, 
-    SUPERVISOR_DEFAULT_NAME, 
-    URL_BASE_PATH, 
+    DEFAULT_URL_SCHEME,
+    SUPERVISOR_DEFAULT_NAME,
+    URL_BASE_PATH,
     DEFAULT_PORT
 };
+use zeroconf::prelude::*;
+use zeroconf::{MdnsService, ServiceType, TxtRecord};
 
 
 /// Represents a service that is advertised on the network.
@@ -161,6 +165,14 @@ pub fn wait_until_ready_and_register(zc: WebthingZeroconf) {
             }
         }
 
+        // Advertise the service using mDNS
+        // print the error if it fails
+        if let Err(e) = register_service(&zc) {
+            error!("Failed to register service with mDNS: {}", e);
+        } else {
+            info!("Service registered with mDNS successfully.");
+        }
+
         if let Ok(mut orchestrator_url) = env::var("WASMIOT_ORCHESTRATOR_URL") {
             orchestrator_url.push_str(URL_BASE_PATH);
 
@@ -194,4 +206,23 @@ pub fn get_listening_address() -> (String, u16) {
 
     let port: u16 = port_str.parse().unwrap_or(DEFAULT_PORT);
     (host, port)
+}
+
+fn register_service(zc: &WebthingZeroconf) -> anyhow::Result<AvahiEventLoop> {
+    // let sub_types = sub_types.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+    let service_type_parts = zc.service_type.split('.').collect::<Vec<_>>();
+    let service_type = ServiceType::new(service_type_parts[0], service_type_parts[1])?;
+    let mut service = MdnsService::new(service_type.clone(), zc.port);
+    let mut txt_record = TxtRecord::new();
+    zc.properties
+        .iter()
+        .for_each(|(key, value)| {
+            txt_record.insert(key, value).unwrap();
+        });
+
+    service.set_name(&zc.service_name);
+    service.set_txt_record(txt_record);
+    service.set_host(&zc.host);
+
+    Ok(service.register()?)
 }

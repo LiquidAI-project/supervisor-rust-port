@@ -9,7 +9,13 @@ RUN apt-get update && apt-get install -y \
     cmake \
     build-essential \
     libv4l-dev \
-    v4l-utils
+    v4l-utils \
+    xorg-dev \
+    libxcb-shape0-dev \
+    libxcb-xfixes0-dev \
+    clang \
+    avahi-daemon \
+    libavahi-client-dev
 
 # Create video group if it doesn't exist and add vscode user to it to allow camera-access
 RUN groupadd -r video || true && usermod -aG video vscode
