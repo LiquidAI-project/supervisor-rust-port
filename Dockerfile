@@ -3,9 +3,11 @@ FROM rust:1.84-bullseye AS build_stage
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN apt update -y && apt upgrade -y && apt install libclang-dev -y
+RUN apt update -y && \
+    apt upgrade -y && \
+    apt install libclang-dev xorg-dev libxcb-shape0-dev libxcb-xfixes0-dev clang avahi-daemon libavahi-client-dev -y
 RUN cargo build --release
-    
+
 # Copy compiled supervisor to final runtime image. Copy instance configs, modules and outputs.
 FROM debian:bullseye-slim AS runtime
 RUN apt update -y && apt upgrade -y
@@ -17,4 +19,3 @@ COPY instance/modules instance/modules
 COPY instance/outputs instance/outputs
 COPY --from=build_stage /app/target/release/supervisor /app/
 CMD ["/app/supervisor"]
-    
