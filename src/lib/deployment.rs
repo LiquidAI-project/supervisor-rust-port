@@ -27,6 +27,7 @@ use strum_macros::{EnumString, AsRefStr};
 use wasmtime::{Val, ValType};
 use crate::lib::constants::{PARAMS_FOLDER, FILE_TYPES};
 use crate::lib::wasmtime::{WasmtimeRuntime, WasmtimeModule, ModuleConfig};
+use indexmap::IndexMap;
 
 /// Represents the lifecycle stage at which a file is mounted into a module's execution context.
 ///
@@ -895,7 +896,7 @@ impl Deployment {
         &mut self,
         module_name: &str,
         function_name: &str,
-        args: &HashMap<String, Value>,
+        args: &IndexMap<String, Value>,
         request_filepaths: &HashMap<String, String>,
     ) -> Result<(WasmtimeModule, Vec<Val>), String> {
         let path_map: HashMap<String, PathBuf> = request_filepaths

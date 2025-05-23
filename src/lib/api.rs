@@ -65,7 +65,7 @@ use crate::function_name;
 use crate::lib::deployment::{Deployment, EndpointArgs, ModuleEndpointMap, EndpointData, Endpoint};
 use crate::lib::wasmtime::{WasmtimeRuntime, ModuleConfig};
 use crate::lib::constants::{MODULE_FOLDER, PARAMS_FOLDER};
-use std::collections::VecDeque;
+use indexmap::IndexMap;
 
 /// Represents a failure to fetch one or more module binaries or data files.
 ///
@@ -203,18 +203,16 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
         ).await;
     });
 
-    let request_args: HashMap<String, Value> = entry.request_args
+    let request_args: IndexMap<String, Value> = entry.request_args
         .as_object()
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-        .unwrap_or_else(HashMap::new);
-
+        .unwrap_or_else(IndexMap::new);
     let (_module, wasm_args) = deployment.prepare_for_running(
         &entry.module_name,
         &entry.function_name,
         &request_args,
         &entry.request_files,
     ).await?;
-
     let func_name = function_name!().to_string();
     let entry_function_name = entry.function_name.clone();
     let entry_clone = entry.clone();
@@ -353,13 +351,12 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
 
         let client = reqwest::Client::new();
         let response = client
-            .request(call_data.method.parse().unwrap_or(reqwest::Method::POST), &call_data.url)
+            .request(call_data.method.to_string().to_uppercase().parse().unwrap_or(reqwest::Method::POST), &call_data.url)
             .headers(headers)
             .multipart(form)
             .send()
             .await
             .map_err(|e| format!("Failed to send chained request: {}", e))?;
-
         return response.json().await.map_err(|e| format!("Invalid response JSON from {}: {}", call_data.url, e));
     }
 
