@@ -89,20 +89,9 @@ pub fn get_modules() -> Value {
         .expect("Failed to parse JSON in modules.json")
 }
 
-/// Loads the `wasmiot-device-description.json` file and injects dynamic platform info.
-///
-/// - Adds live CPU/memory/network/system data via `sysinfo`
-/// - Overwrites `supervisorInterfaces` using `SUPERVISOR_INTERFACES`
-///
-/// # Panics
-/// If the file cannot be opened, read, or parsed.
+/// Returns dynamic platform info.
 pub fn get_device_description() -> Value {
-    let path = get_config_dir().join("wasmiot-device-description.json");
-    let file_str = fs::read_to_string(&path)
-        .unwrap_or_else(|_| panic!("Could not open or read {}", path.display()));
-    let mut description: Value = serde_json::from_str(&file_str)
-        .unwrap_or_else(|e| panic!("Error parsing JSON in {}: {}", path.display(), e));
-
+    let mut description: Value = json!({});
     description["platform"] = get_device_platform_info();
     description["supervisorInterfaces"] = json!(SUPERVISOR_INTERFACES.to_vec());
     description
