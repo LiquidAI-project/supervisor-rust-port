@@ -66,12 +66,12 @@ impl WebthingZeroconf {
         let service_type = "webthing".to_string();
         let service_protocol = "tcp".to_string();
         let service_name = env::var("SUPERVISOR_NAME")
-            .unwrap_or_else(|_| SUPERVISOR_DEFAULT_NAME.to_string())
-            + "._" + &service_type + "._" + &service_protocol + ".local.";
+            .unwrap_or_else(|_| SUPERVISOR_DEFAULT_NAME.to_string());
 
         let properties = vec![
             ("path".to_string(), "/".to_string()),
             ("tls".to_string(), tls_flag.to_string()),
+            ("address".to_string(), host.clone()),
         ];
         WebthingZeroconf {
             service_name,
@@ -104,24 +104,23 @@ pub struct ZeroconfRegistrationData<'a> {
 ///   - WASMIOT_ORCHESTRATOR_URL
 pub fn force_supervisor_registration(zc: WebthingZeroconf) {
         thread::spawn(move || {
-        let addr = format!("{}:{}", zc.host, zc.port);
+        if let Ok(mut orchestrator_url) = env::var("WASMIOT_ORCHESTRATOR_URL") {
+            let addr = format!("{}:{}", zc.host, zc.port);
 
-        loop {
-            match TcpStream::connect(&addr) {
-                Ok(_) => {
-                    debug!("Server is ready at {}", addr);
-                    break;
-                }
-                Err(err) => {
-                    debug!("Waiting for server at {}: {:?}", addr, err);
-                    thread::sleep(Duration::from_secs(1));
+            loop {
+                match TcpStream::connect(&addr) {
+                    Ok(_) => {
+                        debug!("Server is ready at {}", addr);
+                        break;
+                    }
+                    Err(err) => {
+                        debug!("Waiting for server at {}: {:?}", addr, err);
+                        thread::sleep(Duration::from_secs(1));
+                    }
                 }
             }
-        }
 
-        if let Ok(mut orchestrator_url) = env::var("WASMIOT_ORCHESTRATOR_URL") {
             orchestrator_url.push_str(URL_BASE_PATH);
-
             let result = System::new().block_on(async {
                 register_services_to_orchestrator(&zc, &orchestrator_url).await
             });
@@ -134,7 +133,6 @@ pub fn force_supervisor_registration(zc: WebthingZeroconf) {
         }
 
     });
-
 }
 
 /// Sends a service registration POST request to the orchestrator.
@@ -214,16 +212,14 @@ pub fn wait_until_ready_and_register(zc: WebthingZeroconf) {
         if let Err(e) = register_service(zc) {
             error!("Failed to start mDNS listener: {}", e);
         } else {
-            info!("Mdns listener started succesfully.");
+            info!("mDNS listener started successfully.");
         }
-
-
     });
 }
 
 /// Determines the IP address and port this supervisor instance should bind to.
 /// Defaults to 127.0.0.1 and port 8080
-/// 
+///
 /// Reads:
 /// - `WASMIOT_SUPERVISOR_PORT` (falls back to default 8080)
 pub fn get_listening_address() -> (String, u16) {
@@ -238,7 +234,7 @@ pub fn get_listening_address() -> (String, u16) {
     (host, port)
 }
 
-/// Spawn a separate thread that continously listens for mdns requests, and 
+/// Spawn a separate thread that continuously listens for mdns requests, and
 /// responds with supervisor data when requested.
 pub fn register_service(zc: WebthingZeroconf) -> anyhow::Result<()> {
     std::thread::spawn(move || {
@@ -255,7 +251,7 @@ pub fn register_service(zc: WebthingZeroconf) -> anyhow::Result<()> {
 
         service.set_registered_callback(Box::new(|r, _| {
             if let Ok(svc) = r {
-                info!("✅ Responded to mdns query with: {:?}", svc);
+                info!("✅ Responded to mDNS query with: {:?}", svc);
             }
         }));
 
