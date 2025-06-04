@@ -43,7 +43,10 @@ async fn main() -> std::io::Result<()> {
     std::env::set_var("DEFAULT_URL_SCHEME", "http");
 
     // Wait for the server to be ready before advertising over Zeroconf
-    zeroconf::wait_until_ready_and_register(zc);
+    zeroconf::wait_until_ready_and_register(zc.clone());
+    // Force registration of the supervisor with the orchestrator with HTTP
+    // if the WASMIOT_ORCHESTRATOR_URL environment variable is set.
+    zeroconf::force_supervisor_registration(zc);
 
     // Initialize the HTTP server.
     let server = HttpServer::new(move || {
