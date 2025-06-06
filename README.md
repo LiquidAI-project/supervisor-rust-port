@@ -9,16 +9,16 @@ For compiling to armv6 architecture, enable the feature `armv6`. This feature en
 
 Modules need to be serialized in advance to work on armv6 devices. This can be done by putting modules into pulley32/pulley_modules_input folder, running the compile_modules.sh, and then using the serialized modules stored in pulley_modules_output folder in the orchestrator instead of the original .wasm files.
 
-For cross compilations, the easiest method is to install cross. You can do that with `cargo install cross`. After that, to compile to armv6 architecture, run 
-
-`cross build --release --features=armv6 --no-default-features --target=arm-unknown-linux-gnueabihf`
-
-And to compile to armv7, run 
+For cross compilations, the easiest method is to install cross. You can do that with `cargo install cross`. After that, to compile to armv7 architecture, run 
 
 `cross build --release --target=armv7-unknown-linux-gnueabihf`
 
-To compile to some other targets, just change the target to an appropriate one. List of possible targets and their level of support is found in https://doc.rust-lang.org/nightly/rustc/platform-support.html .
+Compilation to armv6 is currently not working, but you can try by running: 
 
+`cross build --release --features=armv6 --no-default-features --target=arm-unknown-linux-gnueabihf`
+
+To compile to some other targets, just change the target to an appropriate one. List of possible targets and their level of support is found in https://doc.rust-lang.org/nightly/rustc/platform-support.html .
+You will also have to create a similar dockerfile as in cross/cross.armv7.Dockerfile, and add that to Cross.toml to include necessary libraries for the compilation process.
 
 ## Development
 
