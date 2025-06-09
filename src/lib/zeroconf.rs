@@ -257,7 +257,7 @@ pub fn register_service(zc: WebthingZeroconf) -> anyhow::Result<()> {
 
         let event_loop = service.register().unwrap();
         loop {
-            event_loop.poll(Duration::from_secs(0)).unwrap();
+            event_loop.poll(Duration::from_secs(1)).unwrap();
         }
     });
     Ok(())

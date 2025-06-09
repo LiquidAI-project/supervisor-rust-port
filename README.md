@@ -2,7 +2,9 @@
 
 Rust version of the existing wasmiot supervisor (found in https://github.com/LiquidAI-project/wasmiot-supervisor)
 
-Currently in testing phase. Works for simple setups. Full functionality requires a 64bit device, but limited version (missing wasmtime_wasi) can be compiled for 32bit armv6 architectures as well by enabling the "armv6" feature flag. 
+Full functionality requires a 64bit device, but limited version (missing wasmtime_wasi) can (in future, currently broken) be compiled for 32bit armv6 architectures as well by enabling the "armv6" feature flag. 
+
+Can also be ran in a docker container. When doing that, the container should be rebuilt every time with `--force-recreate` flag to avoid some issues with avahi-daemon.
 
 ## Cross compilation
 For compiling to armv6 architecture, enable the feature `armv6`. This feature enables cross-compiling for devices with armv6 architecture, such as Raspberry Pi 1 and Zero. Enabled by adding ```--no-default-features --features=armv6``` at the end when running or compiling with cargo/cross.
