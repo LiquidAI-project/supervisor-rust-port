@@ -49,7 +49,7 @@ use chrono::{Utc, DateTime};
 use std::collections::HashMap;
 use sha2::{Sha256, Digest};
 use hex;
-use log::{info, error};
+use log::{error};
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
@@ -196,9 +196,9 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
     let entry_clone = entry.clone();
     task::spawn(async move {
         send_log(
-            "DEBUG", 
-            &format!("Preparing Wasm module '{}'", &module_name_clone), 
-            &func_name, 
+            "DEBUG",
+            &format!("Preparing Wasm module '{}'", &module_name_clone),
+            &func_name,
             Some(&entry_clone)
         ).await;
     });
@@ -218,9 +218,9 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
     let entry_clone = entry.clone();
     task::spawn(async move {
         send_log(
-            "DEBUG", 
-            &format!("Running Wasm function '{}'", &entry_function_name), 
-            &func_name, 
+            "DEBUG",
+            &format!("Running Wasm function '{}'", &entry_function_name),
+            &func_name,
             Some(&entry_clone)
         ).await;
     });
@@ -269,9 +269,9 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
         let entry_clone = entry.clone();
         task::spawn( async move {
             send_log(
-                "DEBUG", 
-                &format!("Execution result: {:?}", &val_clone), 
-                &func_name, 
+                "DEBUG",
+                &format!("Execution result: {:?}", &val_clone),
+                &func_name,
                 Some(&entry_clone)
             ).await;
         });
@@ -393,9 +393,9 @@ pub async fn make_history(mut entry: RequestEntry) -> RequestEntry {
             let entry_clone = entry.clone();
             task::spawn(async move {
                 send_log(
-                    "ERROR", 
-                    &format!("Error during Wasm execution: {}", &err_clone), 
-                    &func_name, 
+                    "ERROR",
+                    &format!("Error during Wasm execution: {}", &err_clone),
+                    &func_name,
                     Some(&entry_clone)
                 ).await;
             });
@@ -444,12 +444,7 @@ pub async fn thingi_description() -> impl Responder {
 /// - Per-interface network traffic (bytes up/down)
 ///
 /// Useful for monitoring the host system and debugging Wasm workload issues.
-pub async fn thingi_health() -> impl Responder {
-    let func_name = function_name!().to_string();
-    tokio::spawn(async move {
-        send_log("INFO", "Health check done", &func_name, None).await;
-    });
-
+pub async fn thingi_health(request: HttpRequest) -> impl Responder {
     let mut sys = System::new_all();
     sys.refresh_all();
 
@@ -475,11 +470,88 @@ pub async fn thingi_health() -> impl Responder {
         })
         .collect();
 
+    let orchestrator_url = env::var("WASMIOT_ORCHESTRATOR_URL").unwrap_or("".to_string());
+    let orchestrator_ip = match reqwest::Url::parse(&orchestrator_url) {
+        Ok(url) => url.host().map(|s| s.to_string()).unwrap_or(String::new()),
+        Err(_) => String::new(),
+    };
+    // orchestrator should set X-Forwarded-For header with the public IP of the orchestrator
+    let url_from_request = match request.headers().get("X-Forwarded-For") {
+        Some(value) => value.to_str().map(|s| s.to_string()).unwrap_or(String::new()),
+        // if X-Forwarded-For is not set, use the IP of the request
+        None => match request.peer_addr() {
+            Some(addr) => addr.ip().to_string(),
+            None => String::new(),
+        }
+    };
+
+    if orchestrator_url != "" && url_from_request == orchestrator_ip {
+        tokio::spawn(async move {
+            send_log(
+                "DEBUG",
+                "Reporting health check done by the orchestrator",
+                &function_name!().to_string(),
+                None
+            ).await;
+        });
+        // TODO: report the health check to the mDNS service to restart renewal timer
+    }
+    else {
+        tokio::spawn(async move {
+            send_log(
+                "DEBUG",
+                &format!("Not reporting health check since IP does not match orchestrator host ({url_from_request} vs {orchestrator_ip})"),
+                &function_name!().to_string(),
+                None
+            ).await;
+        });
+    }
+
+    tokio::spawn(async move {
+        send_log("INFO", "Health check done", &function_name!().to_string(), None).await;
+    });
+
     HttpResponse::Ok().json(json!({
         "cpuUsage": cpu_usage,
         "memoryUsage": memory_usage,
         "networkUsage": network_usage
     }))
+        .customize()
+        .insert_header(("Custom-Orchestrator-Set", env::var("WASMIOT_ORCHESTRATOR_URL").is_ok().to_string()))
+}
+
+/// Registers the active orchestrator URL to the device.
+pub async fn register_orchestrator(payload: web::Json<Value>) -> impl Responder {
+    let func_name = function_name!().to_string();
+    let data: Value = payload.into_inner();
+
+    if !data.is_object() || !data.get("url").is_some() {
+        tokio::spawn(async move {send_log("ERROR", "No url found", &func_name, None).await;});
+        return HttpResponse::BadRequest().json(json!({"error": "No url found"}));
+    }
+
+    let orchestrator_url = data["url"].as_str().unwrap_or("");
+    if !reqwest::Url::parse(&orchestrator_url).is_ok() {
+        tokio::spawn(async move {send_log("ERROR", "Invalid url", &func_name, None).await;});
+        return HttpResponse::BadRequest().json(json!({"error": "Invalid url"}));
+    }
+
+    // Note: on non-Windows platforms setting the environment variables should only be done
+    // if no other process is writing or reading them at the same time
+    let logging_endpoint = format!("{}/device/logs", orchestrator_url);
+    unsafe {
+        env::set_var("WASMIOT_ORCHESTRATOR_URL", orchestrator_url);
+        env::set_var("WASMIOT_LOGGING_ENDPOINT", &logging_endpoint);
+    }
+    assert_eq!(env::var("WASMIOT_ORCHESTRATOR_URL"), Ok(orchestrator_url.to_string()));
+    assert_eq!(env::var("WASMIOT_LOGGING_ENDPOINT"), Ok(logging_endpoint));
+
+    let orchestrator_url_string = orchestrator_url.to_string();
+
+    tokio::spawn(async move {
+        send_log("INFO", &format!("Orchestrator registered at url {orchestrator_url_string}"), &func_name, None).await;
+    });
+    HttpResponse::Ok().json(json!({"status": "success"}))
 }
 
 /// Serves a file produced as output by a WebAssembly module.
@@ -511,7 +583,7 @@ pub async fn get_module_result(req: HttpRequest, path: web::Path<(String, String
 }
 
 /// Handler for getting request history list
-/// 
+///
 /// This is here to match a path that has no parameters vs the default 1 parameter
 pub async fn request_history_list_1() -> impl Responder {
     let new_path = web::Path::from("".to_string());
@@ -556,7 +628,7 @@ pub async fn request_history_list(path: web::Path<String>) -> impl Responder {
 }
 
 /// Handler for running a module function
-/// 
+///
 /// This is here to match a path that has only 3 parameters vs the default 4 parameters
 pub async fn run_module_function_3(
     path: web::Path<(String, String, String)>,
@@ -588,18 +660,18 @@ pub async fn run_module_function(
     if let Some(filename) = maybe_filename {
         let file_path = PARAMS_FOLDER.join(&module_name).join(&filename);
         let log_msg = format!(
-            "Serving file: {}/{}/{}/{}", 
-            deployment_id.clone(), 
-            module_name.clone(), 
-            function_name.clone(), 
+            "Serving file: {}/{}/{}/{}",
+            deployment_id.clone(),
+            module_name.clone(),
+            function_name.clone(),
             filename.clone()
         );
         let func_name = function_name!().to_string();
         tokio::spawn(async move {
             send_log(
-                "INFO", 
-                &log_msg, 
-                &func_name, 
+                "INFO",
+                &log_msg,
+                &func_name,
                 None
             ).await;
         });
@@ -690,18 +762,18 @@ pub async fn run_module_function(
     );
 
     let log_msg = format!(
-        "Executing module function: {}/{}/{}", 
-        deployment_id.clone(), 
-        module_name.clone(), 
+        "Executing module function: {}/{}/{}",
+        deployment_id.clone(),
+        module_name.clone(),
         function_name.clone()
     );
     let func_name = function_name!().to_string();
     let entry_clone = entry.clone();
     tokio::spawn(async move {
         send_log(
-            "INFO", 
-            &log_msg, 
-            &func_name, 
+            "INFO",
+            &log_msg,
+            &func_name,
             Some(&entry_clone)
         ).await;
     });
@@ -1002,7 +1074,7 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
         .and_then(|v| v.as_object())
         .map(|map| map.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_else(HashMap::new);
-    
+
     let deployment = Deployment::new(
         deployment_id.clone(),
         runtimes,
@@ -1044,6 +1116,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         // Duplicate health route for compatibility (was required at some point)
         .route("//health", web::get().to(thingi_health))
 
+        // Registers the active orchestrator URL to the device
+        .route("/register", web::post().to(register_orchestrator))
+
         // Fetch result files generated by module execution
         .route("/module_results/{module_name}/{filename}", web::get().to(get_module_result))
 
@@ -1056,7 +1131,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 
         // Run a module function (GET: immediate execution, no input files)
         .route("/{deployment_id}/modules/{module_name}/{function_name}", web::get().to(run_module_function_3))
-        // Supposedly this doesnt match:   /67ebca4c67d46c4d7f551bea/modules/fibo/fibo?param0=7
+        // Supposedly this doesn't match:   /67ebca4c67d46c4d7f551bea/modules/fibo/fibo?param0=7
 
         // Run a module function (POST: allows input files via multipart)
         .route("/{deployment_id}/modules/{module_name}/{function_name}", web::post().to(run_module_function_3))
