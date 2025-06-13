@@ -470,7 +470,7 @@ pub async fn thingi_health(request: HttpRequest) -> impl Responder {
         })
         .collect();
 
-    let orchestrator_url = env::var("WASMIOT_ORCHESTRATOR_URL").unwrap_or("".to_string());
+    let orchestrator_url = env::var("WASMIOT_ORCHESTRATOR_URL").unwrap_or(String::new());
     let orchestrator_ip = match reqwest::Url::parse(&orchestrator_url) {
         Ok(url) => url.host().map(|s| s.to_string()).unwrap_or(String::new()),
         Err(_) => String::new(),
@@ -478,14 +478,14 @@ pub async fn thingi_health(request: HttpRequest) -> impl Responder {
     // orchestrator should set X-Forwarded-For header with the public IP of the orchestrator
     let url_from_request = match request.headers().get("X-Forwarded-For") {
         Some(value) => value.to_str().map(|s| s.to_string()).unwrap_or(String::new()),
-        // if X-Forwarded-For is not set, use the IP of the request
+        // if X-Forwarded-For is not set, use the IP of the request sender
         None => match request.peer_addr() {
             Some(addr) => addr.ip().to_string(),
             None => String::new(),
         }
     };
 
-    if orchestrator_url != "" && url_from_request == orchestrator_ip {
+    if orchestrator_url != String::new() && url_from_request == orchestrator_ip {
         tokio::spawn(async move {
             send_log(
                 "DEBUG",
