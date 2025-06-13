@@ -8,9 +8,11 @@
 //! - Registers the device with Zeroconf (mDNS/Bonjour)
 //! - Spawns a background worker thread for executing WebAssembly tasks asynchronously
 
-use actix_web::{App, HttpServer};
+use actix_web::{App, HttpServer, web::Data};
 use actix_cors::Cors;
 use log::info;
+use parking_lot::Mutex;
+use std::sync::Arc;
 use supervisor::lib::{api, zeroconf, constants};
 
 /// Main entry point for the supervisor service.
@@ -55,11 +57,12 @@ async fn main() -> std::io::Result<()> {
     std::env::set_var("WASMIOT_SUPERVISOR_IP", &host);
     std::env::set_var("DEFAULT_URL_SCHEME", "http");
 
+    let zc_arc = Arc::new(Mutex::new(zc.clone()));
     // Wait for the server to be ready before advertising over Zeroconf
-    zeroconf::wait_until_ready_and_register(zc.clone());
+    zeroconf::wait_until_ready_and_register(zc_arc.clone());
     // Force registration of the supervisor with the orchestrator with HTTP
     // if the WASMIOT_ORCHESTRATOR_URL environment variable is set.
-    zeroconf::force_supervisor_registration(zc);
+    zeroconf::force_supervisor_registration(zc_arc.clone());
 
     // Initialize the HTTP server.
     let server = HttpServer::new(move || {
@@ -74,6 +77,7 @@ async fn main() -> std::io::Result<()> {
         .wrap(
             actix_web::middleware::Logger::default()
         )
+        .app_data(Data::new(zc_arc.clone()))  // Pass the Zeroconf instance to the app
         .configure(api::configure_routes)
     })
     .bind(("0.0.0.0", port))?;

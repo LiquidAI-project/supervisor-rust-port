@@ -39,6 +39,8 @@
 //! for WebAssembly-based pipelines.
 
 
+use actix_web::web::Data;
+use parking_lot::Mutex;
 use tokio::task;
 use actix_multipart::Multipart;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
@@ -49,8 +51,8 @@ use chrono::{Utc, DateTime};
 use std::collections::HashMap;
 use sha2::{Sha256, Digest};
 use hex;
-use log::{error};
-use std::sync::Mutex;
+use log::error;
+use std::sync::Arc;
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
 use wasmtime::Val;
@@ -65,6 +67,7 @@ use crate::function_name;
 use crate::lib::deployment::{Deployment, EndpointArgs, ModuleEndpointMap, EndpointData, Endpoint};
 use crate::lib::wasmtime::{WasmtimeRuntime, ModuleConfig};
 use crate::lib::constants::{MODULE_FOLDER, PARAMS_FOLDER};
+use crate::lib::zeroconf::{register_health_check, WebthingZeroconf};
 use indexmap::IndexMap;
 
 /// Represents a failure to fetch one or more module binaries or data files.
@@ -187,7 +190,7 @@ impl RequestEntry {
 /// 3. Initiates a next call if the deployment specifies one,
 /// 4. Returns the result or sub-response.
 pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
-    let mut deployments = DEPLOYMENTS.lock().unwrap();
+    let mut deployments = DEPLOYMENTS.lock();
     let deployment = deployments.get_mut(&entry.deployment_id)
         .ok_or_else(|| format!("Deployment '{}' not found", entry.deployment_id))?;
 
@@ -402,7 +405,7 @@ pub async fn make_history(mut entry: RequestEntry) -> RequestEntry {
         }
     }
 
-    REQUEST_HISTORY.lock().unwrap().push(entry.clone());
+    REQUEST_HISTORY.lock().push(entry.clone());
     entry
 }
 
@@ -494,7 +497,17 @@ pub async fn thingi_health(request: HttpRequest) -> impl Responder {
                 None
             ).await;
         });
-        // TODO: report the health check to the mDNS service to restart renewal timer
+
+        // Report the health check to the mDNS service to restart renewal timer
+        match request.app_data::<Data<Arc<Mutex<WebthingZeroconf>>>>() {
+            Some(data) => {
+                let zc_arc = data.get_ref().clone();
+                register_health_check(zc_arc.clone());
+            }
+            None => {
+                error!("Failed to get WebthingZeroconf from app data");
+            }
+        }
     }
     else {
         tokio::spawn(async move {
@@ -600,7 +613,7 @@ pub async fn request_history_list_1() -> impl Responder {
 /// If the matched request failed, it returns HTTP 500 instead of 200.
 pub async fn request_history_list(path: web::Path<String>) -> impl Responder {
     let id = path.into_inner();
-    let history = REQUEST_HISTORY.lock().unwrap();
+    let history = REQUEST_HISTORY.lock();
     if id != "" {
         let func_name = function_name!().to_string();
         let log_msg = format!("Requested history for request ID: {}", id);
@@ -685,7 +698,7 @@ pub async fn run_module_function(
     }
 
     // Check if deployment and module exist
-    let deployments_map = DEPLOYMENTS.lock().unwrap();
+    let deployments_map = DEPLOYMENTS.lock();
     let deployment = match deployments_map.get(&deployment_id) {
         Some(dep) => dep,
         None => {
@@ -819,7 +832,7 @@ pub async fn deployment_delete(path: web::Path<String>) -> impl Responder {
         ).await;
     });
 
-    let mut deps = DEPLOYMENTS.lock().unwrap();
+    let mut deps = DEPLOYMENTS.lock();
 
     if deps.remove(&deployment_id).is_some() {
         HttpResponse::Ok().json(json!({ "status": "success" }))
@@ -1084,7 +1097,7 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
         mounts,
     );
 
-    DEPLOYMENTS.lock().unwrap().insert(deployment_id.clone(), deployment); // TODO: The lock can become poisoned if something panics and DEPLOYMENTS is locked
+    DEPLOYMENTS.lock().insert(deployment_id.clone(), deployment); // TODO: The lock can become poisoned if something panics and DEPLOYMENTS is locked
 
     send_log("INFO", &format!("Deployment created: {}", deployment_id), &func_name, None).await;
 
