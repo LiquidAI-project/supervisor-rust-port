@@ -1,2 +1,5 @@
 [target.armv7-unknown-linux-gnueabihf]
 dockerfile = "./cross/cross.armv7.Dockerfile"
+
+[target.aarch64-unknown-linux-gnu]
+dockerfile = "./cross/cross.aarch64.Dockerfile"
