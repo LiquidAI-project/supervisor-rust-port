@@ -30,7 +30,7 @@ pub const SUPERVISOR_DEFAULT_NAME: &str = "supervisor";
 /// Folder name where deployed Wasm modules are stored under the instance path.
 pub const MODULE_FOLDER_NAME: &str = "wasm-modules";
 
-/// Folder name where mounted files are stored. 
+/// Folder name where mounted files are stored.
 pub const PARAMS_FOLDER_NAME: &str = "wasm-params";
 
 /// Root path where everything related to this instance of service are stored into
@@ -116,7 +116,7 @@ pub static SUPERVISOR_INTERFACES: Lazy<Vec<&'static str>> = Lazy::new(|| {
     // Camera functionality is available for all architectures supported by supervisor
     interfaces.extend_from_slice(CAMERA_FUNCTIONS);
 
-    #[cfg(not(feature = "armv6"))] 
+    #[cfg(not(feature = "armv6"))]
     {
         // Wasi functionalities are not available on armv6 architecture
         interfaces.extend_from_slice(WASI_FUNCTIONS);
@@ -139,13 +139,13 @@ pub const FILE_TYPES: [&str; 7] = [
 ];
 
 // Postfix to recognize serialized modules by
-pub const SERIALIZED_MODULE_POSTFIX: &str = "SERIALIZED.wasm"; 
+pub const SERIALIZED_MODULE_POSTFIX: &str = "SERIALIZED.wasm";
 
 // Postfix to recognize modules that have specifically been serialized for pulley
-pub const PULLEY_MODULE_POSTFIX: &str = "PULLEY.wasm"; 
+pub const PULLEY_MODULE_POSTFIX: &str = "PULLEY.wasm";
 
 // Name of the memory related to each module
-pub const MEMORY_NAME: &str = "memory"; 
+pub const MEMORY_NAME: &str = "memory";
 
 /// Ensures that all required directories for modules and parameter mounts exist.
 ///
@@ -154,3 +154,5 @@ pub fn ensure_required_folders() {
     fs::create_dir_all(&*MODULE_FOLDER).expect("Failed to create module folder");
     fs::create_dir_all(&*PARAMS_FOLDER).expect("Failed to create params folder");
 }
+
+pub const DEFAULT_SERVICE_RENEWAL_TIME: i64 = 900;  // 15 minutes in seconds

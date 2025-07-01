@@ -8,9 +8,11 @@
 //! - Registers the device with Zeroconf (mDNS/Bonjour)
 //! - Spawns a background worker thread for executing WebAssembly tasks asynchronously
 
-use actix_web::{App, HttpServer};
+use actix_web::{App, HttpServer, web::Data};
 use actix_cors::Cors;
-use log::{info, warn};
+use log::info;
+use parking_lot::Mutex;
+use std::sync::Arc;
 use supervisor::lib::{api, zeroconf, constants};
 
 /// Main entry point for the supervisor service.
@@ -25,8 +27,8 @@ use supervisor::lib::{api, zeroconf, constants};
 async fn main() -> std::io::Result<()> {
     // Load environment variables from .env if present
     match dotenv::dotenv() {
-        Ok(path) => info!("Loaded .env from {:?}", path),
-        Err(err) => warn!("Could not load .env file: {:?}", err),
+        Ok(path) => println!("Loaded .env from {:?}", path),
+        Err(err) => println!("Could not load .env file: {:?}", err),
     }
 
     // Ensure required folders like `params/` and `modules/` exist
@@ -35,6 +37,19 @@ async fn main() -> std::io::Result<()> {
     // Initialize logging with default level = info (unless overridden by env)
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    // Ensure that the environment variable for supervisor name is set
+    // - order: SUPERVISOR_NAME, WASMIOT_SUPERVISOR_NAME, or the default name
+    if std::env::var("SUPERVISOR_NAME").is_err() {
+        std::env::set_var(
+            "SUPERVISOR_NAME",
+            match std::env::var("WASMIOT_SUPERVISOR_NAME") {
+                Ok(name) => name,
+                Err(_) => constants::SUPERVISOR_DEFAULT_NAME.to_string(),
+            }
+        );
+    }
+    info!("Supervisor name: {}", std::env::var("SUPERVISOR_NAME").unwrap());
+
     // Start Zeroconf discovery and determine host/port
     let zc = zeroconf::WebthingZeroconf::new();
     let (host, port) = (zc.host.clone(), zc.port);
@@ -42,11 +57,12 @@ async fn main() -> std::io::Result<()> {
     std::env::set_var("WASMIOT_SUPERVISOR_IP", &host);
     std::env::set_var("DEFAULT_URL_SCHEME", "http");
 
+    let zc_arc = Arc::new(Mutex::new(zc.clone()));
     // Wait for the server to be ready before advertising over Zeroconf
-    zeroconf::wait_until_ready_and_register(zc.clone());
+    zeroconf::wait_until_ready_and_register(zc_arc.clone());
     // Force registration of the supervisor with the orchestrator with HTTP
     // if the WASMIOT_ORCHESTRATOR_URL environment variable is set.
-    zeroconf::force_supervisor_registration(zc);
+    zeroconf::force_supervisor_registration(zc_arc.clone());
 
     // Initialize the HTTP server.
     let server = HttpServer::new(move || {
@@ -61,6 +77,7 @@ async fn main() -> std::io::Result<()> {
         .wrap(
             actix_web::middleware::Logger::default()
         )
+        .app_data(Data::new(zc_arc.clone()))  // Pass the Zeroconf instance to the app
         .configure(api::configure_routes)
     })
     .bind(("0.0.0.0", port))?;

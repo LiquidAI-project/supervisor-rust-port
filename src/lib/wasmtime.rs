@@ -29,7 +29,7 @@ use wasmtime_wasi::preview1::{self, WasiP1Ctx};
 use wasmtime_wasi::{WasiCtxBuilder, DirPerms, FilePerms};
 use log::{info, error};
 use crate::lib::wasmtime_imports;
-use crate::lib::constants::{SERIALIZED_MODULE_POSTFIX, PULLEY_MODULE_POSTFIX, MEMORY_NAME};
+use crate::lib::constants::{SERIALIZED_MODULE_POSTFIX, MEMORY_NAME};
 use std::fmt;
 
 
@@ -86,7 +86,7 @@ impl WasmtimeRuntime {
     /// Initializes a new wasmtime runtime
     pub async fn new(data_dirs: Vec<(String, String)>) -> Result<Self, Box<dyn std::error::Error>> {
         let mut config: Config = Config::default();
-        config.async_support(true); 
+        config.async_support(true);
         let engine: Engine = Engine::new(&config).unwrap();
         let args = std::env::args().skip(1).collect::<Vec<_>>();
         let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
@@ -151,7 +151,7 @@ impl WasmtimeRuntime {
                 should_compile = unserialized_module_modified > serialized_module_modified;
             } else {
                 // Module should be serialized since the serialized version doesnt exist yet
-                should_compile = true; 
+                should_compile = true;
             }
             #[cfg(not(feature = "armv6"))]
             if should_compile {
@@ -166,10 +166,10 @@ impl WasmtimeRuntime {
                 error!("Tried loading an unserialized module on armv6 device. This is not a supported operation. Loading module {} failed.", module_name);
                 return Err("Compilation is not supported on armv6 targets. Precompiled/serialized .wasm modules must be used.".into());
             }
-            let deserialized_module = unsafe { 
+            let deserialized_module = unsafe {
                 // NOTE: The serialized module file being loaded can be tampered with, which could cause issues, which makes it unsafe.
                 // For more info: https://docs.wasmtime.dev/api/wasmtime/struct.Module.html#method.deserialize_file
-                wasmtime::Module::deserialize_file(&self.engine, &path_serial) 
+                wasmtime::Module::deserialize_file(&self.engine, &path_serial)
             }?;
             #[cfg(not(feature = "armv6"))]
             let instance = self.linker.instantiate_async(&mut self.store, &deserialized_module).await?;
@@ -234,11 +234,11 @@ impl WasmtimeRuntime {
 
     /// Link remote functions to wasmtime runtime for use by wasm modules.
     pub async fn link_remote_functions(&mut self) {
-        
+
         /////////////////////////////////////////////////////////////////////
         // Camera related external functions
         /////////////////////////////////////////////////////////////////////
-        
+
         let _ = &self.linker.func_new(
             "camera",
             "takeImageDynamicSize",
@@ -369,7 +369,7 @@ impl WasmtimeModule {
 
     pub fn new(config: ModuleConfig) -> Result<Self, Box<dyn std::error::Error>> {
         let module = None;
-        let instance = None; 
+        let instance = None;
         let functions = None;
         let wasmtime_module = WasmtimeModule {
             module: module,
@@ -419,7 +419,7 @@ impl WasmtimeModule {
 
 // ----------------------- Miscellaneous module related things ----------------------- //
 
-/// Struct for containing module name, file location and associated files referred to as 'mounts'. 
+/// Struct for containing module name, file location and associated files referred to as 'mounts'.
 /// This is what a module instance for running functions is created based on.
 #[derive(Clone, Debug)]
 pub struct ModuleConfig {
