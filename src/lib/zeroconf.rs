@@ -11,9 +11,12 @@
 //! This allows services to self-register into the orchestrator.
 
 
+use parking_lot::Mutex;
 use serde::Serialize;
+use tokio::runtime::Runtime;
 use std::env;
 use std::net::TcpStream;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use reqwest::Client;
@@ -24,6 +27,7 @@ use crate::lib::constants::{
     DEFAULT_URL_SCHEME,
     SUPERVISOR_DEFAULT_NAME,
     URL_BASE_PATH,
+    DEFAULT_SERVICE_RENEWAL_TIME,
     DEFAULT_PORT
 };
 use zeroconf::prelude::*;
@@ -44,6 +48,8 @@ pub struct WebthingZeroconf {
     pub host: String,
     pub port: u16,
     pub properties: Vec<(String, String)>,
+    pub register_renewal_time: i64,
+    pub last_register_time: i64,
 }
 
 impl WebthingZeroconf {
@@ -73,6 +79,10 @@ impl WebthingZeroconf {
             ("tls".to_string(), tls_flag.to_string()),
             ("address".to_string(), host.clone()),
         ];
+        let register_renewal_time = match env::var("WASMIOT_REGISTER_RENEWAL_TIME") {
+            Ok(val) => val.parse().unwrap_or(DEFAULT_SERVICE_RENEWAL_TIME),
+            Err(_) => DEFAULT_SERVICE_RENEWAL_TIME,
+        };
         WebthingZeroconf {
             service_name,
             service_type,
@@ -80,6 +90,8 @@ impl WebthingZeroconf {
             host,
             port,
             properties,
+            register_renewal_time,
+            last_register_time: chrono::Utc::now().timestamp(),
         }
     }
 }
@@ -102,10 +114,12 @@ pub struct ZeroconfRegistrationData<'a> {
 /// before sending the registration to orchestrator.
 /// Requires the following env variables to be set in .env file:
 ///   - WASMIOT_ORCHESTRATOR_URL
-pub fn force_supervisor_registration(zc: WebthingZeroconf) {
-        thread::spawn(move || {
+pub fn force_supervisor_registration(zc: Arc<Mutex<WebthingZeroconf>>) {
+    thread::spawn(move || {
         if let Ok(mut orchestrator_url) = env::var("WASMIOT_ORCHESTRATOR_URL") {
-            let addr = format!("{}:{}", zc.host, zc.port);
+            let zc_lock = zc.lock();
+            let addr = format!("{}:{}", zc_lock.host, zc_lock.port);
+            drop(zc_lock);
 
             loop {
                 match TcpStream::connect(&addr) {
@@ -122,7 +136,7 @@ pub fn force_supervisor_registration(zc: WebthingZeroconf) {
 
             orchestrator_url.push_str(URL_BASE_PATH);
             let result = System::new().block_on(async {
-                register_services_to_orchestrator(&zc, &orchestrator_url).await
+                register_services_to_orchestrator(zc, &orchestrator_url).await
             });
 
             if let Err(e) = result {
@@ -141,22 +155,24 @@ pub fn force_supervisor_registration(zc: WebthingZeroconf) {
 /// Converts the `WebthingZeroconf` instance into the proper payload and sends it
 /// to the configured `orchestrator_url`. Logs and returns errors if any occur.
 pub async fn register_services_to_orchestrator(
-    zc: &WebthingZeroconf,
+    zc: Arc<Mutex<WebthingZeroconf>>,
     orchestrator_url: &str,
 ) -> anyhow::Result<()> {
     let mut props_map = serde_json::Map::new();
-    for (k, v) in &zc.properties {
+    let zc_lock = zc.lock();
+    for (k, v) in &zc_lock.properties {
         props_map.insert(k.clone(), serde_json::json!(v));
     }
 
     let data = ZeroconfRegistrationData {
-        name: &zc.service_name,
-        kind: &zc.service_type,
-        port: zc.port,
+        name: &zc_lock.clone().service_name,
+        kind: &zc_lock.clone().service_type,
+        port: zc_lock.port,
         properties: serde_json::Value::Object(props_map),
-        addresses: vec![zc.host.clone()],
-        host: zc.host.clone(),
+        addresses: vec![zc_lock.host.clone()],
+        host: zc_lock.host.clone(),
     };
+    drop(zc_lock);
 
     info!("Sending registration to: {}", orchestrator_url);
     info!("Payload: {:?}", data);
@@ -190,26 +206,30 @@ pub async fn register_services_to_orchestrator(
 /// Spawns a background thread that:
 /// - Repeatedly tries to connect to the supervisor
 /// - Once supervisor is reachable, starts listening to mdns requests from the orchestrator
-pub fn wait_until_ready_and_register(zc: WebthingZeroconf) {
+pub fn wait_until_ready_and_register(zc: Arc<Mutex<WebthingZeroconf>>) {
     thread::spawn(move || {
-        let addr = format!("{}:{}", zc.host, zc.port);
+        {
+            let zc_lock = zc.lock();
+            let addr = format!("{}:{}", zc_lock.host, zc_lock.port);
+            drop(zc_lock);
 
-        loop {
-            match TcpStream::connect(&addr) {
-                Ok(_) => {
-                    debug!("Server is ready at {}", addr);
-                    break;
-                }
-                Err(err) => {
-                    debug!("Waiting for server at {}: {:?}", addr, err);
-                    thread::sleep(Duration::from_secs(1));
+            loop {
+                match TcpStream::connect(&addr) {
+                    Ok(_) => {
+                        debug!("Server is ready at {}", addr);
+                        break;
+                    }
+                    Err(err) => {
+                        debug!("Waiting for server at {}: {:?}", addr, err);
+                        thread::sleep(Duration::from_secs(1));
+                    }
                 }
             }
         }
 
         // Advertise the service using mDNS
         // print the error if it fails
-        if let Err(e) = register_service(zc) {
+        if let Err(e) = register_service(zc.clone()) {
             error!("Failed to start mDNS listener: {}", e);
         } else {
             info!("mDNS listener started successfully.");
@@ -236,17 +256,22 @@ pub fn get_listening_address() -> (String, u16) {
 
 /// Spawn a separate thread that continuously listens for mdns requests, and
 /// responds with supervisor data when requested.
-pub fn register_service(zc: WebthingZeroconf) -> anyhow::Result<()> {
+pub fn register_service(zc: Arc<Mutex<WebthingZeroconf>>) -> anyhow::Result<()> {
+    let zc_clone = zc.clone();
+
     std::thread::spawn(move || {
-        let service_type = ServiceType::new(zc.service_type.as_str(), zc.service_protocol.as_str()).unwrap();
-        let mut service = MdnsService::new(service_type, zc.port);
+        let zc_clone = zc_clone.clone();
+        let zc_lock = zc_clone.lock();
+        let service_type = ServiceType::new(zc_lock.service_type.as_str(), zc_lock.service_protocol.as_str()).unwrap();
+        let mut service = MdnsService::new(service_type, zc_lock.port);
         let mut txt_record = TxtRecord::new();
-        zc.properties
+        zc_lock.properties
             .iter()
             .for_each(|(key, value)| {
                 txt_record.insert(key, value).unwrap();
             });
-        service.set_name(&zc.service_name);
+        service.set_name(&zc_lock.service_name);
+        drop(zc_lock);
         service.set_txt_record(txt_record);
 
         service.set_registered_callback(Box::new(|r, _| {
@@ -258,7 +283,38 @@ pub fn register_service(zc: WebthingZeroconf) -> anyhow::Result<()> {
         let event_loop = service.register().unwrap();
         loop {
             event_loop.poll(Duration::from_secs(1)).unwrap();
+
+            let zc_lock = zc_clone.lock();
+            let time_since_last_register = chrono::Utc::now().timestamp() - zc_lock.last_register_time;
+            let time_check = time_since_last_register > zc_lock.register_renewal_time;
+            drop(zc_lock);
+
+            if time_check {
+                info!("Health check timeout exceeded, re-registering service");
+                break;
+            }
+        }
+
+        match Runtime::new() {
+            Ok(rt) => rt.block_on(async move {
+                update_service_registration(zc.clone()).await;
+            }),
+            Err(e) => {
+                error!("Failed to create Tokio runtime: {}", e);
+            }
         }
     });
     Ok(())
+}
+
+pub fn register_health_check(zc: Arc<Mutex<WebthingZeroconf>>) {
+    let mut zc_lock = zc.lock();
+    zc_lock.last_register_time = chrono::Utc::now().timestamp();
+}
+
+pub async fn update_service_registration(zc: Arc<Mutex<WebthingZeroconf>>) {
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    register_health_check(zc.clone());
+    wait_until_ready_and_register(zc.clone());
+    force_supervisor_registration(zc);
 }

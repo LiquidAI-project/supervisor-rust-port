@@ -9,7 +9,7 @@
 //! - Interpreting execution outputs and chaining calls across modules
 //!
 //! It also includes logic for parsing and validating mount definitions, linking function
-//! endpoints, and preparing module invocations. 
+//! endpoints, and preparing module invocations.
 
 
 use std::collections::{HashMap, HashSet};
@@ -20,7 +20,7 @@ use std::fs::File;
 use std::fs;
 use serde_json::Value;
 use serde::{Deserialize, Serialize};
-use log::{error, warn, info};
+use log::{error, warn};
 use serde_json::Map;
 use std::iter::Iterator;
 use strum_macros::{EnumString, AsRefStr};
@@ -826,8 +826,8 @@ impl Deployment {
             // Ensure no duplicate mappings
             if !received_filepaths.insert(request_mount_path.clone()) {
                 return Err(format!(
-                    "Input file '{}' already mapped to '{}'", 
-                    temp_source_path.display(), 
+                    "Input file '{}' already mapped to '{}'",
+                    temp_source_path.display(),
                     request_mount_path
                 ));
             }
@@ -1044,7 +1044,7 @@ impl Deployment {
 }
 
 /// Determines if a given schema can be represented by a primitive WebAssembly value.
-/// 
+///
 /// Currently only checks for integer types, since they're directly mappable to WASM `i32` or `i64`.
 ///
 /// # Arguments
@@ -1057,7 +1057,7 @@ pub fn can_be_represented_as_wasm_primitive(schema: &Schema) -> bool {
 }
 
 /// Builds the absolute host path for a file mounted into a specific module.
-/// 
+///
 /// Used to resolve where a mounted file should live on the host filesystem (e.g. under `params/`).
 ///
 /// # Arguments
