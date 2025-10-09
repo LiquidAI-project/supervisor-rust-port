@@ -354,13 +354,50 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
 
         let client = reqwest::Client::new();
         let response = client
-            .request(call_data.method.to_string().to_uppercase().parse().unwrap_or(reqwest::Method::POST), &call_data.url)
+            .request(
+                call_data.method.to_string().to_uppercase().parse().unwrap_or(reqwest::Method::POST),
+                &call_data.url
+            )
             .headers(headers)
             .multipart(form)
             .send()
             .await
             .map_err(|e| format!("Failed to send chained request: {}", e))?;
-        return response.json().await.map_err(|e| format!("Invalid response JSON from {}: {}", call_data.url, e));
+
+        // Assume JSON response from the chained call
+        let chained_json: Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Invalid response JSON from {}: {}", call_data.url, e))?;
+
+        // If there's a resultUrl, fetch it (also expected to be JSON)
+        if let Some(url) = chained_json.get("resultUrl").and_then(|v| v.as_str()) {
+            let fetched_json: Value = client
+                .get(url)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to fetch resultUrl {}: {}", url, e))?
+                .json()
+                .await
+                .map_err(|e| format!("Invalid JSON from resultUrl {}: {}", url, e))?;
+
+            // If the fetched JSON contains a "result" key, return that; else return the fetched JSON.
+            let final_json: Value = fetched_json
+                .get("result")
+                .cloned()
+                .unwrap_or_else(|| fetched_json.clone());
+
+            // Record and return the final JSON
+            entry.result = Some(final_json.clone());
+            entry.success = true;
+            return Ok(final_json);
+        }
+
+        // No resultUrl -> record and return the original chained JSON
+        entry.result = Some(chained_json.clone());
+        entry.success = true;
+        return Ok(chained_json);
+
     }
 
     Ok(json!({ "result": entry.result }))
