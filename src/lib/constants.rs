@@ -14,6 +14,8 @@
 use std::path::PathBuf;
 use std::fs;
 use once_cell::sync::Lazy;
+use parking_lot::Mutex;
+use sysinfo::{System, Networks, Disks};
 
 /// Default port used when running the service.
 pub const DEFAULT_PORT: u16 = 8080;
@@ -156,3 +158,7 @@ pub fn ensure_required_folders() {
 }
 
 pub const DEFAULT_SERVICE_RENEWAL_TIME: i64 = 900;  // 15 minutes in seconds
+
+pub(crate) static SYSTEM: Lazy<Mutex<System>> = Lazy::new(|| Mutex::new(System::new_all()));
+pub(crate) static NETWORKS: Lazy<Mutex<Networks>> = Lazy::new(|| Mutex::new(Networks::new_with_refreshed_list()));
+pub(crate) static DISKS: Lazy<Mutex<Disks>> = Lazy::new(|| Mutex::new(Disks::new_with_refreshed_list()));

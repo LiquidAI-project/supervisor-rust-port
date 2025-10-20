@@ -10,12 +10,21 @@
 //!   dynamic system information via `sysinfo`
 
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use sysinfo::{System, Networks};
+use sysinfo::System;
 use crate::lib::constants::SUPERVISOR_INTERFACES;
+use crate::lib::constants::{SYSTEM, NETWORKS, DISKS};
+use crate::structs::device::{
+    CpuInfo, 
+    MemoryInfo, 
+    NetworkInterfaceIpInfo, 
+    OsInfo, 
+    PlatformInfo, 
+};
 
 /// Returns the absolute path to the instance directory.
 ///
@@ -119,51 +128,68 @@ pub fn get_wot_td() -> Value {
 ///
 /// This data is injected into the WasmIoT device description during startup.
 pub fn get_device_platform_info() -> Value {
-    let mut sys = System::new_all();
-    sys.refresh_all();
 
-    let memory_bytes = sys.total_memory();
-    let cpu_name = sys.cpus()[0].brand().to_string();
-    let clock_speed_hz = sys.cpus()[0].frequency() as u64 * 1_000_000;
-    let core_count = sys.cpus().len();
+    let (memory_bytes, cpu_name, cpu_architecture, clock_speed_hz, core_count,
+         system_name, system_kernel, system_os, system_host) = {
+        let mut sys =  SYSTEM.lock();
+        sys.refresh_all();
+        sys.refresh_cpu_all();
+        sys.refresh_memory();
 
-    let system_name = System::name();
-    let system_kernel = System::kernel_version();
-    let system_os = System::os_version();
-    let system_host = System::host_name();
+        let mem_bytes = sys.total_memory();
 
-    let networks = Networks::new_with_refreshed_list();
-    let network_data: Value = networks.iter()
-        .map(|(interface_name, data)| {
-            (
-                interface_name.clone(),
-                json!({
-                    "ipInfo": data.ip_networks()
-                        .iter()
-                        .map(|ip| ip.to_string())
-                        .collect::<Vec<String>>()
-                }),
-            )
-        })
-        .collect();
+        let cpu0 = &sys.cpus()[0];
+        let cpu_name = cpu0.brand().to_string();
+        let clock_speed_hz = cpu0.frequency() as u64 * 1_000_000;
+        let core_count = sys.cpus().len();
 
-    json!({
-        "system": {
-            "name": system_name,
-            "kernel": system_kernel,
-            "os": system_os,
-            "hostName": system_host
+        let system_name   = System::name().unwrap_or_default();
+        let system_kernel = System::kernel_version().unwrap_or_default();
+        let system_os     = System::os_version().unwrap_or_default();
+        let system_host   = System::host_name().unwrap_or_default();
+        let cpu_arch      = System::cpu_arch();
+
+        (mem_bytes, cpu_name, cpu_arch, clock_speed_hz, core_count,
+            system_name, system_kernel, system_os, system_host)
+    };
+
+    let network_map: HashMap<String, NetworkInterfaceIpInfo> = {
+        let mut networks = NETWORKS.lock();
+        networks.refresh(true);
+        networks
+            .iter()
+            .map(|(if_name, data)| {
+                let ips: Vec<String> = data.ip_networks().iter().map(|ip| ip.to_string()).collect();
+                (if_name.clone(), NetworkInterfaceIpInfo { ip_info: ips })
+            })
+            .collect()
+    };
+
+    let storage: HashMap<String, u64> = {
+        let mut disks = DISKS.lock();
+        disks.refresh(true);
+        disks
+            .list()
+            .iter()
+            .map(|d| (d.name().to_string_lossy().to_string(), d.total_space()))
+            .collect()
+    };
+
+    json!(PlatformInfo {
+        cpu: CpuInfo {
+            architecture: cpu_architecture,
+            clock_speed_hz,
+            core_count: core_count as u32,
+            human_readable_name: cpu_name,
         },
-        "memory": {
-            "bytes": memory_bytes
+        memory: MemoryInfo { total_bytes: memory_bytes },
+        storage,
+        network: network_map,
+        system: OsInfo {
+            host_name: system_host,
+            kernel: system_kernel,
+            name: system_name,
+            os: system_os,
         },
-        "cpu": {
-            "humanReadableName": cpu_name,
-            "clockSpeed": {
-                "Hz": clock_speed_hz
-            },
-            "coreCount": core_count
-        },
-        "network": network_data
     })
 }

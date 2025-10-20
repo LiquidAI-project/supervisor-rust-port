@@ -8,3 +8,6 @@ pub mod lib {
     pub mod logging;
     pub mod deployment;
 }
+pub mod structs {
+    pub mod device;
+}

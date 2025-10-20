@@ -17,3 +17,4 @@ instance/wasm-params/*
 .vscode
 pulley32/pulley_modules_input/*.wasm
 pulley32/pulley_modules_output/*.pulleyc
+build
