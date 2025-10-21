@@ -392,14 +392,12 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
                 .cloned()
                 .unwrap_or_else(|| fetched_json.clone());
 
-            // Record and return the final JSON
-            entry.result = Some(final_json.clone());
+            // Return the final JSON, but dont overwrite own results in history with it
             entry.success = true;
             return Ok(final_json);
         }
 
         // No resultUrl -> record and return the original chained JSON
-        entry.result = Some(chained_json.clone());
         entry.success = true;
         return Ok(chained_json);
 
@@ -423,23 +421,25 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
 ///
 /// # Returns
 /// - The updated `RequestEntry` with result and success set
-pub async fn make_history(mut entry: RequestEntry) -> RequestEntry {
+/// - An optional `Value` containing the final result from the execution
+pub async fn make_history(mut entry: RequestEntry) -> (RequestEntry, Option<Value>) {
+    let mut final_opt: Option<Value> = None;
+
     match do_wasm_work(&mut entry).await {
-        Ok(result) => {
-            entry.result = Some(result);
+        Ok(final_json) => {
             entry.success = true;
+            final_opt = Some(final_json);
         }
         Err(err) => {
             entry.result = Some(Value::String(err.clone()));
             entry.success = false;
             log::error!("Error during Wasm execution: {}", err);
-            let err_clone = err.clone();
             let func_name = function_name!().to_string();
             let entry_clone = entry.clone();
             task::spawn(async move {
                 send_log(
                     "ERROR",
-                    &format!("Error during Wasm execution: {}", &err_clone),
+                    &format!("Error during Wasm execution: {}", err),
                     &func_name,
                     Some(&entry_clone)
                 ).await;
@@ -448,8 +448,9 @@ pub async fn make_history(mut entry: RequestEntry) -> RequestEntry {
     }
 
     REQUEST_HISTORY.lock().push(entry.clone());
-    entry
+    (entry, final_opt)
 }
+
 
 /// Returns a machine-readable description of the device and supported Wasm host functions.
 ///
@@ -838,7 +839,7 @@ pub async fn run_module_function(
     }
 
     // Create RequestEntry
-    let mut entry = RequestEntry::new(
+    let entry = RequestEntry::new(
         deployment_id.clone(),
         module_name.clone(),
         function_name.clone(),
@@ -865,7 +866,7 @@ pub async fn run_module_function(
         ).await;
     });
 
-    entry = make_history(entry).await;
+    let (entry, final_opt) = make_history(entry).await;
     let http_scheme = env::var("DEFAULT_URL_SCHEME").unwrap_or_else(|_| {
         error!("Failed to read DEFAULT_URL_SCHEME from enviroment variables, defaulting to 'http'.");
         "http".to_string()
@@ -879,7 +880,11 @@ pub async fn run_module_function(
         "8080".to_string()
     });
     let result_url = format!("{}://{}:{}/request-history/{}", http_scheme, host, port, entry.request_id);
-    HttpResponse::Ok().json(json!({ "resultUrl": result_url }))
+    let mut resp = json!({ "resultUrl": result_url });
+    if let Some(final_json) = final_opt {
+        resp["result"] = final_json;
+    }
+    HttpResponse::Ok().json(resp)
 }
 
 /// Deletes (removes) an active deployment from memory by its ID.
