@@ -10,4 +10,5 @@ pub mod lib {
 }
 pub mod structs {
     pub mod device;
+    pub mod request_entry;
 }

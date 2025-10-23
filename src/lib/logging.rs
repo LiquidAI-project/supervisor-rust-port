@@ -12,7 +12,7 @@ use chrono::Utc;
 use serde_json::json;
 use std::env;
 use reqwest::Client;
-use crate::lib::api::RequestEntry;
+use crate::structs::request_entry::RequestEntry;
 use std::collections::HashMap;
 use log::{info, debug, warn, error};
 

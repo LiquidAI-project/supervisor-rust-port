@@ -2,7 +2,7 @@ services:
   supervisor:
     tty: true # Makes log level colors visible
     build: .
-    container_name: rust_supervisor
+    container_name: rust_supervisor_docker
     ports:
       - "3005:8080"
     privileged: true
@@ -13,7 +13,7 @@ services:
       - ./instance/output:/app/instance/output
     networks:
       default:
-        ipv4_address: 172.15.0.25
+        ipv4_address: 172.16.0.10
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 1m30s
@@ -33,4 +33,4 @@ networks:
     ipam:
       driver: default
       config:
-        - subnet: 172.15.0.0/24
+        - subnet: 172.16.0.0/24
