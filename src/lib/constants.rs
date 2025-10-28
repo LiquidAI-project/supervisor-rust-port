@@ -35,6 +35,9 @@ pub const MODULE_FOLDER_NAME: &str = "wasm-modules";
 /// Folder name where mounted files are stored.
 pub const PARAMS_FOLDER_NAME: &str = "wasm-params";
 
+/// Max amount of steps allowed in a single deployment chain.
+pub const MAX_DEPLOYMENT_STEPS: usize = 100;
+
 /// Root path where everything related to this instance of service are stored into
 ///
 /// This is typically configured via the `INSTANCE_PATH` environment variable.
