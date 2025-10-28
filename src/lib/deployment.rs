@@ -632,7 +632,8 @@ pub type FunctionEndpointMap = HashMap<String, Endpoint>;
 pub type ModuleEndpointMap = HashMap<String, FunctionEndpointMap>;
 
 /// Maps function names to how they are linked to other functions.
-pub type FunctionLinkMap = HashMap<String, FunctionLink>;
+// pub type FunctionLinkMap = HashMap<String, FunctionLink>;
+pub type FunctionLinkMap = HashMap<String, Vec<FunctionLink>>;
 
 /// Maps module names to function link maps (i.e. call graphs).
 pub type ModuleLinkMap = HashMap<String, FunctionLinkMap>;
@@ -756,10 +757,36 @@ impl Deployment {
         }
 
         // Parse instruction links (how to chain calls between modules/functions)
+        // if let Some(Value::Object(modules)) = self._instructions.get("modules") {
+        //     for (module_name, functions) in modules {
+        //         if let Value::Object(fn_map) = functions {
+        //             let mut function_links = HashMap::new();
+        //             for (function_name, link) in fn_map {
+        //                 if let Value::Object(link_map) = link {
+        //                     let from = link_map.get("from")
+        //                         .and_then(|v| serde_json::from_value::<Endpoint>(v.clone()).ok());
+        //                     let to = link_map.get("to")
+        //                         .and_then(|v| serde_json::from_value::<Endpoint>(v.clone()).ok());
+        //                     if let Some(from_endpoint) = from {
+        //                         function_links.insert(
+        //                             function_name.clone(),
+        //                             FunctionLink { from: from_endpoint, to },
+        //                         );
+        //                     } else {
+        //                         error!("Skipping function link for {}/{}: Missing 'from' field", module_name, function_name);
+        //                     }
+        //                 }
+        //             }
+        //             self.instructions.insert(module_name.clone(), function_links);
+        //         }
+        //     }
+        // } else {
+        //     warn!("No 'modules' key found in `_instructions`. Using empty instructions.");
+        // }
         if let Some(Value::Object(modules)) = self._instructions.get("modules") {
             for (module_name, functions) in modules {
                 if let Value::Object(fn_map) = functions {
-                    let mut function_links = HashMap::new();
+                    let mut function_links: FunctionLinkMap = HashMap::new();
                     for (function_name, link) in fn_map {
                         if let Value::Object(link_map) = link {
                             let from = link_map.get("from")
@@ -767,10 +794,9 @@ impl Deployment {
                             let to = link_map.get("to")
                                 .and_then(|v| serde_json::from_value::<Endpoint>(v.clone()).ok());
                             if let Some(from_endpoint) = from {
-                                function_links.insert(
-                                    function_name.clone(),
-                                    FunctionLink { from: from_endpoint, to },
-                                );
+                                function_links.entry(function_name.clone())
+                                    .or_insert_with(Vec::new)
+                                    .push(FunctionLink { from: from_endpoint, to });
                             } else {
                                 error!("Skipping function link for {}/{}: Missing 'from' field", module_name, function_name);
                             }
@@ -784,15 +810,40 @@ impl Deployment {
         }
     }
 
+    // Helper function to get the next target endpoint based on the step_index from headers
+    pub fn next_target_with_index(
+        &self,
+        module_name: &str,
+        function_name: &str,
+        step_index: usize,
+    ) -> Option<&Endpoint> {
+        let mod_map = self.instructions.get(module_name)?;
+        let vec = mod_map.get(function_name)?;
+
+        log::info!("Mod_map: {:?}", mod_map);
+        log::info!("Vec: {:?}", vec);
+        log::info!("Step index: {}", step_index);
+        
+        // If step_index is in range, use it, otherwise return None
+        vec.get(step_index).and_then(|link| link.to.as_ref())
+    }
+
     /// Return the next function's endpoint (if any) that this function is supposed to call.
     ///
     /// Returns `None` if this is the terminal function.
+    // pub fn _next_target(&self, module_name: &str, function_name: &str) -> Option<&Endpoint> {
+    //     let mod_map = self.instructions.get(module_name)
+    //         .expect(&format!("Module '{}' not found in instructions", module_name));
+    //     let link = mod_map.get(function_name)
+    //         .expect(&format!("Function '{}' not found in module '{}'", function_name, module_name));
+    //     link.to.as_ref()
+    // }
     pub fn _next_target(&self, module_name: &str, function_name: &str) -> Option<&Endpoint> {
         let mod_map = self.instructions.get(module_name)
             .expect(&format!("Module '{}' not found in instructions", module_name));
-        let link = mod_map.get(function_name)
+        let vec = mod_map.get(function_name)
             .expect(&format!("Function '{}' not found in module '{}'", function_name, module_name));
-        link.to.as_ref()
+        vec.get(0).and_then(|link| link.to.as_ref())
     }
 
     /// Validates and sets up file mounts for a module function before execution.

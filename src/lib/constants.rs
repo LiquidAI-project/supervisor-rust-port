@@ -38,6 +38,9 @@ pub const PARAMS_FOLDER_NAME: &str = "wasm-params";
 /// Folder name where deployments are stored.
 pub const DEPLOYMENTS_FOLDER_NAME: &str = "deployments";
 
+/// Max amount of steps allowed in a single deployment chain.
+pub const MAX_DEPLOYMENT_STEPS: usize = 100;
+
 /// Root path where everything related to this instance of service are stored into
 ///
 /// This is typically configured via the `INSTANCE_PATH` environment variable.

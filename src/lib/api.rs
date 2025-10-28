@@ -49,7 +49,7 @@ use sysinfo::System;
 use serde_json::{json, Value};
 use chrono::Utc;
 use std::collections::HashMap;
-use log::error;
+use log::{debug, error, warn};
 use std::sync::Arc;
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
@@ -64,7 +64,7 @@ use crate::lib::logging::send_log;
 use crate::function_name;
 use crate::lib::deployment::{Deployment, EndpointArgs, ModuleEndpointMap, EndpointData, Endpoint};
 use crate::lib::wasmtime::{WasmtimeRuntime, ModuleConfig};
-use crate::lib::constants::{MODULE_FOLDER, PARAMS_FOLDER, DEPLOYMENTS_FOLDER};
+use crate::lib::constants::{MAX_DEPLOYMENT_STEPS, MODULE_FOLDER, PARAMS_FOLDER, DEPLOYMENTS_FOLDER};
 use crate::lib::zeroconf::{register_health_check, WebthingZeroconf};
 use indexmap::IndexMap;
 use crate::structs::device::{
@@ -158,6 +158,222 @@ fn save_deployment_to_disk(deployment: &Deployment) -> Result<(), String> {
 /// 2. Interprets its result,
 /// 3. Initiates a next call if the deployment specifies one,
 /// 4. Returns the result or sub-response.
+// pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
+//     let mut deployments = DEPLOYMENTS.lock();
+//     let deployment = deployments.get_mut(&entry.deployment_id)
+//         .ok_or_else(|| format!("Deployment '{}' not found", entry.deployment_id))?;
+
+//     let func_name = function_name!().to_string();
+//     let module_name_clone = entry.module_name.clone();
+//     let entry_clone = entry.clone();
+//     task::spawn(async move {
+//         send_log(
+//             "DEBUG",
+//             &format!("Preparing Wasm module '{}'", &module_name_clone),
+//             &func_name,
+//             Some(&entry_clone)
+//         ).await;
+//     });
+
+//     let request_args: IndexMap<String, Value> = entry.request_args
+//         .as_object()
+//         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+//         .unwrap_or_else(IndexMap::new);
+//     let (_module, wasm_args) = deployment.prepare_for_running(
+//         &entry.module_name,
+//         &entry.function_name,
+//         &request_args,
+//         &entry.request_files,
+//     ).await?;
+//     let func_name = function_name!().to_string();
+//     let entry_function_name = entry.function_name.clone();
+//     let entry_clone = entry.clone();
+//     task::spawn(async move {
+//         send_log(
+//             "DEBUG",
+//             &format!("Running Wasm function '{}'", &entry_function_name),
+//             &func_name,
+//             Some(&entry_clone)
+//         ).await;
+//     });
+
+//     let runtime = deployment.runtimes.get_mut(&entry.module_name)
+//         .ok_or_else(|| format!("Runtime not found for module '{}'", entry.module_name))?;
+
+//     let return_count = runtime.get_return_types(&entry.module_name, &entry.function_name).await.len();
+//     let output_vals = runtime.run_function(
+//         &entry.module_name,
+//         &entry.function_name,
+//         wasm_args,
+//         return_count,
+//     ).await;
+
+//     let raw_output = output_vals.first().map(|v| match v {
+//         Val::I32(i) => json!(i),
+//         Val::I64(i) => json!(i),
+//         Val::F32(f) => json!(f32::from_bits(*f)),
+//         Val::F64(f) => json!(f64::from_bits(*f)),
+//         _ => Value::Null,
+//     }).unwrap_or(Value::Null);
+
+//     let raw_output_clone = raw_output.clone();
+//     let entry_clone = entry.clone();
+//     let func_name = function_name!().to_string();
+//     tokio::spawn(async move {
+//         send_log(
+//             "DEBUG",
+//             &format!("... Result: {}", raw_output_clone),
+//             &func_name,
+//             Some(&entry_clone),
+//         )
+//         .await;
+//     });
+
+//     let (this_result, next_call) = deployment.interpret_call_from(
+//         &entry.module_name,
+//         &entry.function_name,
+//         raw_output.clone()
+//     );
+
+//     if let Some(val) = &this_result.0 {
+//         let val_clone = val.clone();
+//         let func_name = function_name!().to_string();
+//         let entry_clone = entry.clone();
+//         task::spawn( async move {
+//             send_log(
+//                 "DEBUG",
+//                 &format!("Execution result: {:?}", &val_clone),
+//                 &func_name,
+//                 Some(&entry_clone)
+//             ).await;
+//         });
+//     }
+//     if let Some(EndpointData::StrList(filenames)) = &this_result.1 {
+//         if let Some(filename) = filenames.first() {
+//             let result_url = format!(
+//                 "http://{}/module_results/{}/{}",
+//                 get_device_ip(),
+//                 entry.module_name,
+//                 filename
+//             );
+//             let result_url_clone = result_url.clone();
+//             let func_name = function_name!().to_string();
+//             if let Some(EndpointData::StrList(filenames)) = &this_result.1 {
+//                 entry.outputs = filenames.iter()
+//                     .map(|f| make_output_url(&entry.module_name, f))
+//                     .collect();
+//             }
+//             let entry_clone = entry.clone();
+//             task::spawn(async move {
+//                 send_log(
+//                     "DEBUG",
+//                     &format!("Result URL: {}", &result_url_clone),
+//                     &func_name,
+//                     Some(&entry_clone),
+//                 ).await;
+//             });
+//         }
+//     }
+
+//     entry.result = this_result.0.clone().map(|arg| match arg {
+//         EndpointArgs::Str(s) => Value::String(s),
+//         EndpointArgs::StrList(vs) => Value::Array(vs.into_iter().map(Value::String).collect()),
+//         EndpointArgs::Dict(map) => Value::Object(map.into_iter().collect()),
+//     });
+
+//     if let Some(call_data) = next_call {
+//         let mut files = HashMap::new();
+//         let EndpointData::StrList(ref file_names) = call_data.files;
+//         for name in file_names {
+//             let full_path = get_params_path(&entry.module_name, Some(name));
+//             let file = std::fs::File::open(&full_path)
+//                 .map_err(|e| format!("Failed to open file for subcall: {}", e))?;
+//             files.insert(name.clone(), file);
+//         }
+
+//         let mut headers = reqwest::header::HeaderMap::new();
+//         for (k, v) in &call_data.headers {
+//             if let (Ok(key), Ok(val)) = (
+//                 reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+//                 reqwest::header::HeaderValue::from_str(v),
+//             ) {
+//                 headers.insert(key, val);
+//             }
+//         }
+
+//         let module_name_clone = entry.module_name.clone();
+//         let call_data_url_clone = call_data.url.clone();
+//         let func_name = function_name!().to_string();
+//         let entry_clone = entry.clone();
+//         task::spawn(async move {
+//             send_log(
+//                 "DEBUG",
+//                 &format!("Making sub-call from '{}' to '{}'", &module_name_clone, &call_data_url_clone),
+//                 &func_name,
+//                 Some(&entry_clone),
+//             ).await;
+//         });
+
+//         drop(deployments);
+
+//         let mut form = reqwest::multipart::Form::new();
+
+//         for (name, mut file) in files {
+//             let mut buf = Vec::new();
+//             use std::io::Read;
+//             file.read_to_end(&mut buf).map_err(|e| format!("Failed to read file for multipart: {}", e))?;
+
+//             form = form.part(name.clone(), reqwest::multipart::Part::bytes(buf).file_name(name));
+//         }
+
+//         let client = reqwest::Client::new();
+//         let response = client
+//             .request(
+//                 call_data.method.to_string().to_uppercase().parse().unwrap_or(reqwest::Method::POST),
+//                 &call_data.url
+//             )
+//             .headers(headers)
+//             .multipart(form)
+//             .send()
+//             .await
+//             .map_err(|e| format!("Failed to send chained request: {}", e))?;
+
+//         // Assume JSON response from the chained call
+//         let chained_json: Value = response
+//             .json()
+//             .await
+//             .map_err(|e| format!("Invalid response JSON from {}: {}", call_data.url, e))?;
+
+//         // If there's a resultUrl, fetch it (also expected to be JSON)
+//         if let Some(url) = chained_json.get("resultUrl").and_then(|v| v.as_str()) {
+//             let fetched_json: Value = client
+//                 .get(url)
+//                 .send()
+//                 .await
+//                 .map_err(|e| format!("Failed to fetch resultUrl {}: {}", url, e))?
+//                 .json()
+//                 .await
+//                 .map_err(|e| format!("Invalid JSON from resultUrl {}: {}", url, e))?;
+
+//             // If the fetched JSON contains a "result" key, return that; else return the fetched JSON.
+//             let final_json: Value = fetched_json
+//                 .get("result")
+//                 .cloned()
+//                 .unwrap_or_else(|| fetched_json.clone());
+
+//             // Return the final JSON, but dont overwrite own results in history with it
+//             entry.success = true;
+//             return Ok(final_json);
+//         }
+
+//         // No resultUrl -> record and return the original chained JSON
+//         entry.success = true;
+//         return Ok(chained_json);
+
+//     }
+
+//     Ok(json!({ "result": entry.result }))
+// }
 pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
     let mut deployments = DEPLOYMENTS.lock();
     let deployment = deployments.get_mut(&entry.deployment_id)
@@ -186,6 +402,7 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
         &request_args,
         &entry.request_files,
     ).await?;
+
     let func_name = function_name!().to_string();
     let entry_function_name = entry.function_name.clone();
     let entry_clone = entry.clone();
@@ -198,6 +415,7 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
         ).await;
     });
 
+    // Execute the wasm module
     let runtime = deployment.runtimes.get_mut(&entry.module_name)
         .ok_or_else(|| format!("Runtime not found for module '{}'", entry.module_name))?;
 
@@ -226,41 +444,45 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
             &format!("... Result: {}", raw_output_clone),
             &func_name,
             Some(&entry_clone),
-        )
-        .await;
+        ).await;
     });
 
-    let (this_result, next_call) = deployment.interpret_call_from(
-        &entry.deployment_id,
-        &entry.module_name,
-        &entry.function_name,
-        raw_output.clone()
-    );
+    // Parse current endpoint result according to its declared media type
+    let endpoint = &deployment.endpoints[&entry.module_name][&entry.function_name];
+    let output_mounts = deployment
+        .mounts
+        .get(&entry.module_name)
+        .and_then(|m| m.get(&entry.function_name))
+        .and_then(|sm| sm.get(&crate::lib::deployment::MountStage::OUTPUT))
+        .cloned()
+        .unwrap_or_default();
 
-    if let Some(val) = &this_result.0 {
-        let val_clone = val.clone();
+    let parsed = deployment.parse_endpoint_result(raw_output.clone(), &endpoint.response, &output_mounts);
+
+    // Result into entry
+    if let Some(val) = &parsed.0 {
         let func_name = function_name!().to_string();
         let entry_clone = entry.clone();
+        let val_clone = val.clone();
         task::spawn( async move {
             send_log(
                 "DEBUG",
-                &format!("Execution result: {:?}", &val_clone),
+                &format!("Execution result (parsed): {:?}", &val_clone),
                 &func_name,
                 Some(&entry_clone)
             ).await;
         });
     }
-    if let Some(EndpointData::StrList(filenames)) = &this_result.1 {
+    if let Some(EndpointData::StrList(filenames)) = &parsed.1 {
         if let Some(filename) = filenames.first() {
             let result_url = make_output_url(&entry.deployment_id, &entry.module_name, filename);
-            let result_url_clone = result_url.clone();
+            entry.outputs = filenames.iter()
+                .map(|f| make_output_url(&entry.deployment_id, &entry.module_name, f))
+                .collect();
+
             let func_name = function_name!().to_string();
-            if let Some(EndpointData::StrList(filenames)) = &this_result.1 {
-                entry.outputs = filenames.iter()
-                    .map(|f| make_output_url(&entry.deployment_id, &entry.module_name, f))
-                    .collect();
-            }
             let entry_clone = entry.clone();
+            let result_url_clone = result_url.clone();
             task::spawn(async move {
                 send_log(
                     "DEBUG",
@@ -272,22 +494,37 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
         }
     }
 
-    entry.result = this_result.0.clone().map(|arg| match arg {
+    entry.result = parsed.0.clone().map(|arg| match arg {
         EndpointArgs::Str(s) => Value::String(s),
         EndpointArgs::StrList(vs) => Value::Array(vs.into_iter().map(Value::String).collect()),
         EndpointArgs::Dict(map) => Value::Object(map.into_iter().collect()),
     });
 
+    // Decide next step
+    let step_index = entry.step_index;
+    let next_call = deployment
+        .next_target_with_index(&entry.module_name, &entry.function_name, step_index)
+        .map(|next_ep| crate::lib::deployment::CallData::from_endpoint(next_ep, parsed.0.clone(), parsed.1.clone()));
+
+    log::info!("Step index {}", step_index);
+    log::info!("Next call: {:?}", next_call);
+
+    // If there is a next call, chain it
     if let Some(call_data) = next_call {
+        // Prepare file parts (if any)
         let mut files = HashMap::new();
-        let EndpointData::StrList(ref file_names) = call_data.files;
-        for name in file_names {
-            let full_path = get_params_path(&entry.deployment_id, &entry.module_name, Some(name));
-            let file = std::fs::File::open(&full_path)
-                .map_err(|e| format!("Failed to open file for subcall: {}", e))?;
-            files.insert(name.clone(), file);
+        match &call_data.files {
+            EndpointData::StrList(file_names) => {
+                for name in file_names {
+                    let full_path = get_params_path(&entry.deployment_id, &entry.module_name, Some(name));
+                    let file = std::fs::File::open(&full_path)
+                        .map_err(|e| format!("Failed to open file for subcall: {}", e))?;
+                    files.insert(name.clone(), file);
+                }
+            }
         }
 
+        // Build headers (include incremented step)
         let mut headers = reqwest::header::HeaderMap::new();
         for (k, v) in &call_data.headers {
             if let (Ok(key), Ok(val)) = (
@@ -297,6 +534,11 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
                 headers.insert(key, val);
             }
         }
+        let next_idx = step_index.saturating_add(1);
+        headers.insert(
+            reqwest::header::HeaderName::from_static("x-chain-step"),
+            reqwest::header::HeaderValue::from_str(&next_idx.to_string()).unwrap(),
+        );
 
         let module_name_clone = entry.module_name.clone();
         let call_data_url_clone = call_data.url.clone();
@@ -305,7 +547,7 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
         task::spawn(async move {
             send_log(
                 "DEBUG",
-                &format!("Making sub-call from '{}' to '{}'", &module_name_clone, &call_data_url_clone),
+                &format!("Making sub-call (X-Chain-Step={}) from '{}' to '{}'", next_idx, &module_name_clone, &call_data_url_clone),
                 &func_name,
                 Some(&entry_clone),
             ).await;
@@ -313,6 +555,7 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
 
         drop(deployments);
 
+        // Prepare multipart form
         let mut form = reqwest::multipart::Form::new();
 
         for (name, mut file) in files {
@@ -323,14 +566,18 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
             form = form.part(name.clone(), reqwest::multipart::Part::bytes(buf).file_name(name));
         }
 
+        // Build request
         let client = reqwest::Client::new();
-        let response = client
+        let req_builder = client
             .request(
-                call_data.method.to_string().to_uppercase().parse().unwrap_or(reqwest::Method::POST),
+                call_data.method.to_uppercase().parse().unwrap_or(reqwest::Method::POST),
                 &call_data.url
             )
             .headers(headers)
-            .multipart(form)
+            .multipart(form);
+
+        // Send
+        let response = req_builder
             .send()
             .await
             .map_err(|e| format!("Failed to send chained request: {}", e))?;
@@ -366,11 +613,11 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
         // No resultUrl -> record and return the original chained JSON
         entry.success = true;
         return Ok(chained_json);
-
     }
 
     Ok(json!({ "result": entry.result }))
 }
+
 
 /// Executes a WebAssembly function call and records its result in history.
 ///
@@ -710,6 +957,31 @@ pub async fn run_module_function(
     req: HttpRequest,
     payload: web::Payload,
 ) -> impl Responder {
+
+    // Warn if the header was missing
+    if !req.headers().contains_key("X-Chain-Step") {
+        warn!("Missing X-Chain-Step header, defaulting to step 0");
+    }
+
+    // Read incoming step header "X-Chain-Step" (default to zero if not present).
+    // Header represents which step of execution this supervisor is expected to execute.
+    // No header defaults to zero, which means first step is executed.
+    let step_index: usize = req
+        .headers()
+        .get("X-Chain-Step")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    debug!("X-Chain-Step => {}", step_index);
+
+    // Stop execution if step index exceeds max allowed, to prevent possible infinite chains
+    if step_index > MAX_DEPLOYMENT_STEPS {
+        warn!("X-Chain-Step exceeds {}, stopping execution", MAX_DEPLOYMENT_STEPS);
+        return HttpResponse::BadRequest().json(json!({
+            "error": format!("X-Chain-Step exceeds {}", MAX_DEPLOYMENT_STEPS)
+        }));
+    }
+
     let (deployment_id, module_name, function_name, maybe_filename) = path.into_inner();
 
     // Serve static file if filename is provided
@@ -818,6 +1090,7 @@ pub async fn run_module_function(
         request_args,
         request_files,
         Utc::now(),
+        step_index
     );
 
     let log_msg = format!(
