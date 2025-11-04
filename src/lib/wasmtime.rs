@@ -258,6 +258,17 @@ impl WasmtimeRuntime {
             wasmtime_imports::takeImage,
         );
 
+        /////////////////////////////////////////////////////////////////////
+        // Other external functions
+        /////////////////////////////////////////////////////////////////////
+        
+        let _ = &self.linker.func_new(
+            "network",
+            "ping",
+            FuncType::new(&self.engine, [ValType::I32, ValType::I32, ValType::I32, ValType::I32, ValType::I32], [ValType::F32, ValType::F32, ValType::F32]),
+            wasmtime_imports::ping,
+        );
+
     }
 
 

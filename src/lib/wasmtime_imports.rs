@@ -8,6 +8,8 @@ use nokhwa::pixel_format::RgbFormat;
 use image::codecs::jpeg::JpegEncoder;
 use image::ColorType;
 use std::env;
+use std::net::{IpAddr, Ipv4Addr};
+use std::time::Duration;
 
 #[cfg(not(feature = "armv6"))]
 use wasmtime_wasi::preview1::WasiP1Ctx;
@@ -211,4 +213,77 @@ pub fn takeImage(
     _results: &mut [Val],
 ) -> Result<()> {
     unimplemented!();
+}
+
+
+/// Computes the mean and standard deviation of a slice of f32 values.
+/// Returns (mean, standard_deviation).
+fn stats(times_ms: &[f32]) -> (f32, f32) {
+    if times_ms.is_empty() {
+        return (0.0, 0.0);
+    }
+    let n = times_ms.len() as f32;
+    let sum: f32 = times_ms.iter().copied().sum();
+    let mean = sum / n;
+    let var = times_ms.iter().map(|v| {
+        let d = *v - mean;
+        d * d
+    }).sum::<f32>() / n;
+    (mean, var.sqrt())
+}
+
+
+/// Performs a ping to the specified IPv4 address.
+/// # Arguments
+/// * `args[0]`: first octet of IPv4 address (u8 as i32)
+/// * `args[1]`: second octet of IPv4 address (u8 as i32)
+/// * `args[2]`: third octet of IPv4 address (u8 as i32)
+/// * `args[3]`: fourth octet of IPv4 address (u8 as i32)
+/// * `args[4]`: number of ping attempts (i32)
+/// # Returns
+/// * `results[0]`: average round-trip time in milliseconds (f32)
+/// * `results[1]`: standard deviation of round-trip time in milliseconds (f32)
+/// * `results[2]`: packet loss ratio (f32, 0.0 to 1.0)
+pub fn ping(
+    mut _caller: Caller<'_, WasiP1Ctx>,
+    args: &[Val],
+    results: &mut [Val],
+) -> Result<()> {
+    let a = match args.get(0) { Some(Val::I32(v)) => *v as u8, _ => anyhow::bail!("ping: arg0 missing or invalid") };
+    let b = match args.get(1) { Some(Val::I32(v)) => *v as u8, _ => anyhow::bail!("ping: arg1 missing or invalid") };
+    let c = match args.get(2) { Some(Val::I32(v)) => *v as u8, _ => anyhow::bail!("ping: arg2 missing or invalid") };
+    let d = match args.get(3) { Some(Val::I32(v)) => *v as u8, _ => anyhow::bail!("ping: arg3 missing or invalid") };
+    let mut count = match args.get(4) { Some(Val::I32(v)) => *v, _ => anyhow::bail!("ping: arg4 missing or invalid") };
+    if count < 1 { count = 1; }
+    if count > 50 { count = 50; } // Limit to 50 pings max
+
+    let ip = IpAddr::V4(Ipv4Addr::new(a,b,c,d));
+    let mut times: Vec<f32> = Vec::with_capacity(count as usize);
+    let mut lost: u32 = 0;
+
+    for _ in 0..count {
+        let mut p = ping::new(ip);
+        p.timeout(Duration::from_secs(2));      // Set 2 second timeout
+        match p.send() {
+            Ok(reply) => {
+                let ms = reply.rtt.as_secs_f64() as f32 * 1000.0;
+                times.push(ms);
+            }
+            Err(_e) => {
+                lost += 1;
+            }
+        }
+    }
+
+    let (avg, stdev) = stats(&times);
+    let loss = (lost as f32) / (count as f32);
+
+    // Check that the given results slice has enough space
+    if results.len() != 3 {
+        anyhow::bail!("expected 3 results");
+    }
+    results[0] = Val::F32(avg.to_bits());
+    results[1] = Val::F32(stdev.to_bits());
+    results[2] = Val::F32(loss.to_bits());
+    Ok(())
 }
