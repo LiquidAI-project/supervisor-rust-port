@@ -262,10 +262,10 @@ impl WasmtimeRuntime {
         // Other external functions
         /////////////////////////////////////////////////////////////////////
         
-        let _ = &self.linker.func_new(
+        let _ = &self.linker.func_new_async(
             "network",
             "ping",
-            FuncType::new(&self.engine, [ValType::I32, ValType::I32, ValType::I32, ValType::I32, ValType::I32], [ValType::F32, ValType::F32, ValType::F32]),
+            FuncType::new(&self.engine, [ValType::I32, ValType::I32, ValType::I32, ValType::I32], [ValType::F32]),
             wasmtime_imports::ping,
         );
 

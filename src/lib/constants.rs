@@ -60,6 +60,11 @@ pub const CAMERA_FUNCTIONS: &[&str] = &[
     "takeImage"
 ];
 
+/// Network related functions
+pub const NETWORK_FUNCTIONS: &[&str] = &[
+    "ping"
+];
+
 /// Functions provided by wasip1 for use by modules compiled for wasm32-wasip1 target
 pub const WASI_FUNCTIONS: &[&str] = &[
     "args_get",
@@ -117,6 +122,9 @@ pub static SUPERVISOR_INTERFACES: Lazy<Vec<&'static str>> = Lazy::new(|| {
 
     // Camera functionality is available for all architectures supported by supervisor
     interfaces.extend_from_slice(CAMERA_FUNCTIONS);
+
+    // Network functionalities
+    interfaces.extend_from_slice(NETWORK_FUNCTIONS);
 
     #[cfg(not(feature = "armv6"))]
     {
