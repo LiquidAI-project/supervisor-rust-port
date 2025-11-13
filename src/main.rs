@@ -40,13 +40,16 @@ async fn main() -> std::io::Result<()> {
     // Ensure that the environment variable for supervisor name is set
     // - order: SUPERVISOR_NAME, WASMIOT_SUPERVISOR_NAME, or the default name
     if std::env::var("SUPERVISOR_NAME").is_err() {
-        std::env::set_var(
-            "SUPERVISOR_NAME",
-            match std::env::var("WASMIOT_SUPERVISOR_NAME") {
-                Ok(name) => name,
-                Err(_) => constants::SUPERVISOR_DEFAULT_NAME.to_string(),
-            }
-        );
+        unsafe {
+            std::env::set_var(
+                "SUPERVISOR_NAME",
+                match std::env::var("WASMIOT_SUPERVISOR_NAME") {
+                    Ok(name) => name,
+                    Err(_) => constants::SUPERVISOR_DEFAULT_NAME.to_string(),
+                }
+            );
+        }
+
     }
     info!("Supervisor name: {}", std::env::var("SUPERVISOR_NAME").unwrap());
 
@@ -54,8 +57,10 @@ async fn main() -> std::io::Result<()> {
     let zc = zeroconf::WebthingZeroconf::new();
     let (host, port) = (zc.host.clone(), zc.port);
     info!("host:{}, port:{}", host, port);
-    std::env::set_var("WASMIOT_SUPERVISOR_IP", &host);
-    std::env::set_var("DEFAULT_URL_SCHEME", "http");
+    unsafe {
+        std::env::set_var("WASMIOT_SUPERVISOR_IP", &host);
+        std::env::set_var("DEFAULT_URL_SCHEME", "http");
+    }
 
     let zc_arc = Arc::new(Mutex::new(zc.clone()));
     // Wait for the server to be ready before advertising over Zeroconf
