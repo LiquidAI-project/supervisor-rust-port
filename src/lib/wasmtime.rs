@@ -24,13 +24,16 @@ use std::fs;
 use anyhow::Result;
 use wasmtime::{Config, Engine, Func, FuncType, Instance, Linker, Memory, MemoryAccessError, Module, Store, Val, ValType};
 #[cfg(not(feature="armv6"))]
-use wasmtime_wasi::preview1::{self, WasiP1Ctx};
+use wasmtime_wasi::p1::{self, WasiP1Ctx};
 #[cfg(not(feature="armv6"))]
 use wasmtime_wasi::{WasiCtxBuilder, DirPerms, FilePerms};
 use log::{info, error};
 use crate::lib::wasmtime_imports;
 use crate::lib::constants::{SERIALIZED_MODULE_POSTFIX, MEMORY_NAME};
 use std::fmt;
+use wasmtime_wasi_nn::witx;
+use wasmtime_wasi_nn::witx::WasiNnCtx;
+use wasmtime_wasi_nn::InMemoryRegistry;
 
 
 // ----------------------- Wasmtime Runtime related functionality ----------------------- //
@@ -38,8 +41,8 @@ use std::fmt;
 #[cfg(not(feature="armv6"))]
 pub struct WasmtimeRuntime {
     pub engine: Engine,
-    pub store: Store<WasiP1Ctx>,
-    pub linker: Linker<WasiP1Ctx>,
+    pub store: Store<Ctx>,
+    pub linker: Linker<Ctx>,
     pub modules: HashMap<String, WasmtimeModule>,
     pub functions: Option<HashMap<String, WasmtimeModule>>,
 }
@@ -58,8 +61,8 @@ impl fmt::Debug for WasmtimeRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WasmtimeRuntime")
             .field("engine", &"<Engine>")
-            .field("store", &"<Store<WasiP1Ctx>>")
-            .field("linker", &"<Linker<WasiP1Ctx>>")
+            .field("store", &"<Store<Ctx>>")
+            .field("linker", &"<Linker<Ctx>>")
             .field("modules", &self.modules)
             .field("functions", &self.functions)
             .finish()
@@ -79,17 +82,29 @@ impl fmt::Debug for WasmtimeRuntime {
     }
 }
 
+pub struct Ctx {
+    wasi: WasiP1Ctx,
+    nn: WasiNnCtx,
+}
+
+impl Ctx {
+    fn wasi(&mut self) -> &mut WasiP1Ctx { &mut self.wasi }
+    fn nn(&mut self) -> &mut WasiNnCtx { &mut self.nn }
+}
+
 
 impl WasmtimeRuntime {
 
     #[cfg(not(feature="armv6"))]
     /// Initializes a new wasmtime runtime
     pub async fn new(data_dirs: Vec<(String, String)>) -> Result<Self, Box<dyn std::error::Error>> {
+        use wasmtime_wasi_nn::backend;
+
         let mut config: Config = Config::default();
         config.async_support(true);
         let engine: Engine = Engine::new(&config).unwrap();
         let args = std::env::args().skip(1).collect::<Vec<_>>();
-        let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
+        let mut linker: Linker<Ctx> = Linker::new(&engine);
         let mut wasi_ctx = WasiCtxBuilder::new();
         wasi_ctx.inherit_stdio();
         wasi_ctx.inherit_env();
@@ -100,8 +115,13 @@ impl WasmtimeRuntime {
             wasi_ctx.preopened_dir(&source, &target, DirPerms::all(), FilePerms::all())?;
         }
         let wasi_p1 = wasi_ctx.build_p1();
-        let store = Store::new(&engine, wasi_p1);
-        preview1::add_to_linker_async(&mut linker, |t| t)?;
+        let backends = backend::list();
+        let registry = InMemoryRegistry::new();
+        let nn_ctx = WasiNnCtx::new(backends, registry.into());
+        let store = Store::new(&engine, Ctx { wasi: wasi_p1, nn: nn_ctx });
+        p1::add_to_linker_async(&mut linker, |cx: &mut Ctx| cx.wasi())?;
+        witx::add_to_linker(&mut linker, |cx: &mut Ctx| cx.nn())?;
+
         let modules: HashMap<String, WasmtimeModule> = HashMap::new();
         let functions = None; // TODO: What exactly should this be?
         let mut runtime: WasmtimeRuntime = Self {
@@ -111,6 +131,7 @@ impl WasmtimeRuntime {
             modules,
             functions
         };
+        
         runtime.link_remote_functions().await;
         Ok(runtime)
     }

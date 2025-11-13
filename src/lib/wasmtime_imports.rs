@@ -14,7 +14,7 @@ use std::time::Duration;
 use surge_ping::{Client, Config, PingIdentifier, PingSequence};
 
 #[cfg(not(feature = "armv6"))]
-use wasmtime_wasi::preview1::WasiP1Ctx;
+use crate::lib::wasmtime::Ctx;
 
 /// Host function import: captures a JPEG image with a statically defined size in memory.
 ///
@@ -33,7 +33,7 @@ use wasmtime_wasi::preview1::WasiP1Ctx;
 #[cfg(not(feature="armv6"))]
 #[allow(non_snake_case)]
 pub fn takeImageStaticSize(
-    mut caller: Caller<'_, WasiP1Ctx>,
+    mut caller: Caller<'_, Ctx>,
     args: &[Val],
     _results: &mut [Val],
 ) -> Result<()> {
@@ -109,7 +109,7 @@ pub fn takeImageStaticSize(
 #[cfg(not(feature="armv6"))]
 #[allow(non_snake_case)]
 pub fn takeImageDynamicSize(
-    mut caller: Caller<'_, WasiP1Ctx>,
+    mut caller: Caller<'_, Ctx>,
     args: &[Val],
     _results: &mut [Val],
 ) -> Result<()> {
@@ -200,7 +200,7 @@ pub fn capture_image() -> Result<Vec<u8>, String> {
 #[cfg(not(feature="armv6"))]
 #[allow(non_snake_case)]
 pub fn takeImage(
-    mut _caller: Caller<'_, WasiP1Ctx>,
+    mut _caller: Caller<'_, Ctx>,
     _args: &[Val],
     _results: &mut [Val],
 ) -> Result<()> {
@@ -228,7 +228,7 @@ pub fn takeImage(
 /// # Returns
 /// * `results[0]`: round-trip time in milliseconds (f32)
 pub fn ping<'a>(
-    mut _caller: Caller<'a, WasiP1Ctx>,
+    mut _caller: Caller<'a, Ctx>,
     args: &'a [Val],
     results: &'a mut [Val],
 ) -> Box<dyn Future<Output = Result<()>> + Send + 'a> {

@@ -115,6 +115,16 @@ pub const WASI_FUNCTIONS: &[&str] = &[
     "sock_shutdown"
 ];
 
+/// Functions provided by the wasi-nn crate for wasm modules
+pub const WASI_NN_FUNCTIONS: &[&str] = &[
+    "load",
+    "load_by_name",
+    "init_execution_context",
+    "set_input",
+    "compute",
+    "get_output"
+];
+
 /// The list of supervisor interfaces imported into WASM modules.
 /// Generated based on enabled features.
 pub static SUPERVISOR_INTERFACES: Lazy<Vec<&'static str>> = Lazy::new(|| {
@@ -128,8 +138,9 @@ pub static SUPERVISOR_INTERFACES: Lazy<Vec<&'static str>> = Lazy::new(|| {
 
     #[cfg(not(feature = "armv6"))]
     {
-        // Wasi functionalities are not available on armv6 architecture
+        // Wasi and wasi-nn functionalities are not available on armv6 architecture
         interfaces.extend_from_slice(WASI_FUNCTIONS);
+        interfaces.extend_from_slice(WASI_NN_FUNCTIONS);
     }
 
     interfaces
