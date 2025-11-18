@@ -35,6 +35,9 @@ pub const MODULE_FOLDER_NAME: &str = "wasm-modules";
 /// Folder name where mounted files are stored.
 pub const PARAMS_FOLDER_NAME: &str = "wasm-params";
 
+/// Folder name where deployments are stored.
+pub const DEPLOYMENTS_FOLDER_NAME: &str = "deployments";
+
 /// Root path where everything related to this instance of service are stored into
 ///
 /// This is typically configured via the `INSTANCE_PATH` environment variable.
@@ -52,6 +55,11 @@ pub static MODULE_FOLDER: Lazy<PathBuf> = Lazy::new(|| INSTANCE_PATH.join(MODULE
 ///
 /// This is derived from the `INSTANCE_PATH` and `PARAMS_FOLDER_NAME`.
 pub static PARAMS_FOLDER: Lazy<PathBuf> = Lazy::new(|| INSTANCE_PATH.join(PARAMS_FOLDER_NAME));
+
+/// Full path to the directory used for saving deployments
+///
+/// This is derived from the `INSTANCE_PATH` and `DEPLOYMENTS_FOLDER_NAME`.
+pub static DEPLOYMENTS_FOLDER: Lazy<PathBuf> = Lazy::new(|| INSTANCE_PATH.join(DEPLOYMENTS_FOLDER_NAME));
 
 /// Functions provided for the camera module
 pub const CAMERA_FUNCTIONS: &[&str] = &[

@@ -435,7 +435,7 @@ pub fn get_supported_file_schemas(
 /// Represents the kinds of inputs that can be passed to a Wasm function.
 ///
 /// Used internally to pass arguments to the runtime.
-#[derive(Debug, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum EndpointArgs {
     /// Single string argument (scalar).
     Str(String),
@@ -466,7 +466,7 @@ impl From<HashMap<String, Value>> for EndpointArgs {
 /// Represents output data from a Wasm function execution, such as file paths.
 ///
 /// This typically includes paths to output files created by the function.
-#[derive(Debug, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum EndpointData {
     /// List of file paths (as strings).
     StrList(Vec<String>),
@@ -486,7 +486,7 @@ pub type EndpointOutput = (Option<EndpointArgs>, Option<EndpointData>);
 /// Describes the next function call in a chain, along with HTTP request details.
 ///
 /// Used when chaining Wasm module functions by interpreting `Endpoint` definitions.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CallData {
     /// Full URL to call (including any query parameters).
     pub url: String,
@@ -576,7 +576,7 @@ impl CallData {
 /// Represents a link (call chain) between two Wasm function endpoints.
 ///
 /// Used in instruction graphs to describe function chaining behavior.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FunctionLink {
     /// The source function that triggers the next one.
     pub from: Endpoint,
@@ -656,12 +656,13 @@ pub type ModuleMountMap = HashMap<String, FunctionMountMap>;
 /// - Chain function calls across modules based on user-defined instructions
 ///
 /// This structure mirrors the behavior of the original Python `deployment.py` system.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Deployment {
     /// ID of the deployment (may be used for namespacing or identification).
     pub id: String,
 
     /// WebAssembly runtimes loaded and associated with modules.
+    #[serde(skip)]
     pub runtimes: HashMap<String, WasmtimeRuntime>,
 
     /// The initial module configs (before parsing into indexed map).
@@ -677,12 +678,15 @@ pub struct Deployment {
     pub _mounts: HashMap<String, Value>,
 
     /// Parsed module configs by name.
+    #[serde(skip)]
     pub modules: HashMap<String, ModuleConfig>,
 
     /// Parsed call graph of module functions.
+    #[serde(skip)]
     pub instructions: ModuleLinkMap,
 
     /// Parsed mapping of all mount paths for all functions.
+    #[serde(skip)]
     pub mounts: ModuleMountMap,
 }
 
@@ -722,7 +726,7 @@ impl Deployment {
     /// - Maps `_modules` to the `modules` field.
     /// - Parses raw `_mounts` into `MountPathFile`s for each function stage.
     /// - Parses `_instructions` into a call graph of `FunctionLink`s.
-    fn init(&mut self) {
+    pub fn init(&mut self) {
         // Build module name → config map
         for m in &self._modules {
             self.modules.insert(m.name.clone(), m.clone());
@@ -800,6 +804,7 @@ impl Deployment {
     /// This sets up the module's environment so it can access inputs via WASI.
     pub fn _connect_request_files_to_mounts(
         &self,
+        deployment_id: &str,
         module_name: &str,
         function_name: &str,
         request_filepaths: &HashMap<String, PathBuf>,
@@ -870,7 +875,7 @@ impl Deployment {
                 return Err(format!("Missing input file: {}", mount.path));
             };
 
-            let host_path = module_mount_path(module_name, &mount.path);
+            let host_path = module_mount_path(deployment_id, module_name, &mount.path);
             if host_path != temp_source_path {
                 match fs::copy(&temp_source_path, &host_path) {
                     Ok(_) => {},
@@ -894,6 +899,7 @@ impl Deployment {
     /// Returns the instantiated module and list of WASM `Val`s as arguments.
     pub async fn prepare_for_running(
         &mut self,
+        deployment_id: &str,
         module_name: &str,
         function_name: &str,
         args: &IndexMap<String, Value>,
@@ -904,21 +910,36 @@ impl Deployment {
             .map(|(k, v)| (k.clone(), PathBuf::from(v)))
             .collect();
 
-        self._connect_request_files_to_mounts(module_name, function_name, &path_map)
+        self._connect_request_files_to_mounts(deployment_id, module_name, function_name, &path_map)
             .map_err(|e| format!("Mount error: {}", e))?;
 
         let config = self.modules
             .get(module_name)
             .ok_or_else(|| format!("Module '{}' not found in self.modules", module_name))?;
 
+        if !self.runtimes.contains_key(module_name) {
+            let host_dir = PARAMS_FOLDER
+                .join(deployment_id)
+                .join(module_name)
+                .to_string_lossy()
+                .to_string();
+
+            let mounts = vec![(host_dir, ".".to_string())];
+
+            let runtime = WasmtimeRuntime::new(mounts).await
+                .map_err(|e| format!("Failed to initialize runtime for module '{}': {}", module_name, e))?;
+
+            self.runtimes.insert(module_name.to_string(), runtime);
+        }
+
         let runtime = self.runtimes
             .get_mut(module_name)
-            .ok_or_else(|| format!("Runtime for module '{}' not found", module_name))?;
+            .expect("Runtime must exist after initialization");
 
         runtime.load_module(config.clone()).await
             .map_err(|e| format!("Failed to load module: {}", e))?;
 
-        let arg_types = runtime.get_arg_types(module_name, function_name).await; // TODO: Is this an issue to do at this point or not?
+        let arg_types = runtime.get_arg_types(module_name, function_name).await;
 
         let module = runtime.get_module(module_name).await
             .ok_or_else(|| format!("Module '{}' not found after load", module_name))?;
@@ -964,6 +985,7 @@ impl Deployment {
         Ok((module.clone(), primitive_args))
     }
 
+
     /// Interprets the output from a Wasm function call and determines the next call (if any).
     ///
     /// Returns:
@@ -971,6 +993,7 @@ impl Deployment {
     /// - Optional `CallData` describing how to invoke the next endpoint.
     pub fn interpret_call_from(
         &self,
+        _deployment_id: &str,
         module_name: &str,
         function_name: &str,
         wasm_output: Value,
@@ -1061,11 +1084,12 @@ pub fn can_be_represented_as_wasm_primitive(schema: &Schema) -> bool {
 /// Used to resolve where a mounted file should live on the host filesystem (e.g. under `params/`).
 ///
 /// # Arguments
+/// * `deployment_id` - ID of the deployment the module belongs to
 /// * `module_name` - Name of the module the file belongs to.
 /// * `filename` - The relative path (mount path) used within the module.
 ///
 /// # Returns
 /// * `PathBuf` pointing to the correct location on disk.
-pub fn module_mount_path(module_name: &str, filename: &str) -> PathBuf {
-    PARAMS_FOLDER.join(module_name).join(filename)
+pub fn module_mount_path(deployment_id: &str, module_name: &str, filename: &str) -> PathBuf {
+    PARAMS_FOLDER.join(deployment_id).join(module_name).join(filename)
 }

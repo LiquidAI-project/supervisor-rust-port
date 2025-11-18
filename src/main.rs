@@ -14,6 +14,9 @@ use log::info;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use supervisor::lib::{api, zeroconf, constants};
+use supervisor::lib::constants::DEPLOYMENTS_FOLDER;
+use supervisor::lib::deployment::Deployment;
+use supervisor::lib::api::DEPLOYMENTS;
 
 /// Main entry point for the supervisor service.
 ///
@@ -68,6 +71,56 @@ async fn main() -> std::io::Result<()> {
     // Force registration of the supervisor with the orchestrator with HTTP
     // if the WASMIOT_ORCHESTRATOR_URL environment variable is set.
     zeroconf::force_supervisor_registration(zc_arc.clone());
+
+    // Before initializing the server, load the currently existing deployments into memory
+    if let Err(e) = std::fs::create_dir_all(&*DEPLOYMENTS_FOLDER) {
+        log::error!(
+            "Failed to create deployments folder {}: {}",
+            DEPLOYMENTS_FOLDER.display(),
+            e
+        );
+    } else if let Ok(entries) = std::fs::read_dir(&*DEPLOYMENTS_FOLDER) {
+        for entry_res in entries {
+            let Ok(entry) = entry_res else { continue };
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("<unknown>");
+            let contents = match std::fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!(
+                        "Failed to read deployment JSON file {}: {}",
+                        path.display(),
+                        e
+                    );
+                    continue;
+                }
+            };
+            let mut deployment: Deployment = match serde_json::from_str(&contents) {
+                Ok(d) => d,
+                Err(e) => {
+                    log::error!(
+                        "Failed to deserialize deployment JSON from {}: {}",
+                        path.display(),
+                        e
+                    );
+                    continue;
+                }
+            };
+            deployment.init();
+            let id = deployment.id.clone();
+            {
+                let mut deps = DEPLOYMENTS.lock();
+                deps.insert(id.clone(), deployment);
+            }
+            log::info!("Loaded saved deployment '{}' from {}", id, file_name);
+        }
+    }
 
     // Initialize the HTTP server.
     let server = HttpServer::new(move || {

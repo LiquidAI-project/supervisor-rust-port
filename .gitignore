@@ -14,6 +14,7 @@ venv
 .env
 instance/wasm-modules/*
 instance/wasm-params/*
+instance/deployments/*.json
 .vscode
 pulley32/pulley_modules_input/*.wasm
 pulley32/pulley_modules_output/*.pulleyc

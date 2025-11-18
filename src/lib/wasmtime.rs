@@ -34,6 +34,7 @@ use std::fmt;
 use wasmtime_wasi_nn::witx;
 use wasmtime_wasi_nn::witx::WasiNnCtx;
 use wasmtime_wasi_nn::InMemoryRegistry;
+use serde::{Deserialize, Serialize};
 
 
 // ----------------------- Wasmtime Runtime related functionality ----------------------- //
@@ -453,7 +454,7 @@ impl WasmtimeModule {
 
 /// Struct for containing module name, file location and associated files referred to as 'mounts'.
 /// This is what a module instance for running functions is created based on.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModuleConfig {
     pub id: String,
     pub name: String,
@@ -488,7 +489,7 @@ impl ModuleConfig {
 }
 
 /// Struct for ML models
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MLModel {
     pub path: String,
     pub alloc_function_name: String,

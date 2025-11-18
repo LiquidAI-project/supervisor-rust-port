@@ -60,11 +60,11 @@ use std::fs::File;
 use std::env;
 use std::io::Write;
 use crate::lib::configuration::{get_wot_td, get_device_description};
-use crate::lib::logging::{send_log, get_device_ip};
+use crate::lib::logging::send_log;
 use crate::function_name;
 use crate::lib::deployment::{Deployment, EndpointArgs, ModuleEndpointMap, EndpointData, Endpoint};
 use crate::lib::wasmtime::{WasmtimeRuntime, ModuleConfig};
-use crate::lib::constants::{MODULE_FOLDER, PARAMS_FOLDER};
+use crate::lib::constants::{MODULE_FOLDER, PARAMS_FOLDER, DEPLOYMENTS_FOLDER};
 use crate::lib::zeroconf::{register_health_check, WebthingZeroconf};
 use indexmap::IndexMap;
 use crate::structs::device::{
@@ -86,7 +86,7 @@ pub struct FetchFailures {
 ///
 /// Maps a deployment ID to its corresponding `Deployment` struct,
 /// including runtime environments, modules, instructions and mounts.
-static DEPLOYMENTS: Lazy<Mutex<HashMap<String, Deployment>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+pub static DEPLOYMENTS: Lazy<Mutex<HashMap<String, Deployment>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// History of request executions, including success/failure and output data.
 ///
@@ -94,42 +94,61 @@ static DEPLOYMENTS: Lazy<Mutex<HashMap<String, Deployment>>> = Lazy::new(|| Mute
 static REQUEST_HISTORY: Lazy<Mutex<Vec<RequestEntry>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 /// Constructs and returns the filesystem path to the given module's `.wasm` file.
+pub fn get_module_path(deployment_id: &str, module_name: &str) -> PathBuf {
+    MODULE_FOLDER.join(deployment_id).join(module_name)
+}
+
+/// Constructs the path to a deployment's JSON file.
 ///
-/// # Arguments
-/// * `module_name` - The name of the module
-///
-/// # Returns
-/// PathBuf pointing to the module inside the configured `MODULE_FOLDER`.
-pub fn get_module_path(module_name: &str) -> PathBuf {
-    MODULE_FOLDER.join(module_name)
+/// Folder structure: instance/deployments/{deployment_id}.json
+pub fn get_deployment_path(deployment_id: &str) -> PathBuf {
+    DEPLOYMENTS_FOLDER.join(format!("{}.json", deployment_id))
 }
 
 /// Constructs the path to a file mounted to a specific module.
-///
-/// # Arguments
-/// * `module_name` - The name of the module.
-/// * `filename` - Optional file name. If `None`, returns the mount folder path.
-///
-/// # Returns
-/// PathBuf to the mount directory or the specific file inside it.
-pub fn get_params_path(module_name: &str, filename: Option<&str>) -> PathBuf {
+pub fn get_params_path(deployment_id: &str, module_name: &str, filename: Option<&str>) -> PathBuf {
+    let base = PARAMS_FOLDER.join(deployment_id).join(module_name);
     match filename {
-        Some(file) => PARAMS_FOLDER.join(module_name).join(file),
-        None => PARAMS_FOLDER.join(module_name),
+        Some(file) => base.join(file),
+        None => base,
     }
 }
 
 
 /// Helper that generates urls for output files
-fn make_output_url(module_name: &str, filename: &str) -> String {
+fn make_output_url(deployment_id: &str, module_name: &str, filename: &str) -> String {
     let scheme = std::env::var("DEFAULT_URL_SCHEME").unwrap_or_else(|_| "http".to_string());
     let host = std::env::var("WASMIOT_SUPERVISOR_IP").unwrap_or_else(|_| "localhost".to_string());
     let port = std::env::var("WASMIOT_SUPERVISOR_PORT").unwrap_or_else(|_| "8080".to_string());
-    format!("{scheme}://{host}:{port}/module_results/{}/{}",
+    format!("{scheme}://{host}:{port}/module_results/{}/{}/{}",
+        urlencoding::encode(deployment_id),
         urlencoding::encode(module_name),
         urlencoding::encode(filename)
     )
 }
+
+
+/// Helper to save a deployment to deployment folder as json.
+fn save_deployment_to_disk(deployment: &Deployment) -> Result<(), String> {
+    let path = get_deployment_path(&deployment.id);
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!("Failed to create deployment directory {}: {}", parent.display(), e)
+        })?;
+    }
+
+    let file = File::create(&path).map_err(|e| {
+        format!("Failed to create deployment file {}: {}", path.display(), e)
+    })?;
+
+    serde_json::to_writer_pretty(file, deployment).map_err(|e| {
+        format!("Failed to serialize deployment {}: {}", deployment.id, e)
+    })?;
+
+    Ok(())
+}
+
 
 
 /// Executes the WebAssembly function for the given request and performs any chained subcalls.
@@ -161,6 +180,7 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_else(IndexMap::new);
     let (_module, wasm_args) = deployment.prepare_for_running(
+        &entry.deployment_id,
         &entry.module_name,
         &entry.function_name,
         &request_args,
@@ -211,6 +231,7 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
     });
 
     let (this_result, next_call) = deployment.interpret_call_from(
+        &entry.deployment_id,
         &entry.module_name,
         &entry.function_name,
         raw_output.clone()
@@ -231,17 +252,12 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
     }
     if let Some(EndpointData::StrList(filenames)) = &this_result.1 {
         if let Some(filename) = filenames.first() {
-            let result_url = format!(
-                "http://{}/module_results/{}/{}",
-                get_device_ip(),
-                entry.module_name,
-                filename
-            );
+            let result_url = make_output_url(&entry.deployment_id, &entry.module_name, filename);
             let result_url_clone = result_url.clone();
             let func_name = function_name!().to_string();
             if let Some(EndpointData::StrList(filenames)) = &this_result.1 {
                 entry.outputs = filenames.iter()
-                    .map(|f| make_output_url(&entry.module_name, f))
+                    .map(|f| make_output_url(&entry.deployment_id, &entry.module_name, f))
                     .collect();
             }
             let entry_clone = entry.clone();
@@ -266,7 +282,7 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
         let mut files = HashMap::new();
         let EndpointData::StrList(ref file_names) = call_data.files;
         for name in file_names {
-            let full_path = get_params_path(&entry.module_name, Some(name));
+            let full_path = get_params_path(&entry.deployment_id, &entry.module_name, Some(name));
             let file = std::fs::File::open(&full_path)
                 .map_err(|e| format!("Failed to open file for subcall: {}", e))?;
             files.insert(name.clone(), file);
@@ -594,18 +610,19 @@ pub async fn register_orchestrator(payload: web::Json<Value>) -> impl Responder 
 
 /// Serves a file produced as output by a WebAssembly module.
 ///
-/// This handles URLs like `/module_results/{module_name}/{filename}` and returns
+/// This handles URLs like `/module_results/{deployment_id}/{module_name}/{filename}` and returns
 /// the corresponding file from the module’s parameter/output folder.
 ///
 /// # Path Parameters
-/// - `module_name`: The module that created the file
+/// - `deployment_id`: The deployment that contains the module
+/// - `module_name`: The module that created the file  
 /// - `filename`: The output file name
-pub async fn get_module_result(req: HttpRequest, path: web::Path<(String, String)>) -> impl Responder {
-    let (module_name, filename) = path.into_inner();
-    let file_path = get_params_path(&module_name, Some(&filename));
+pub async fn get_module_result(req: HttpRequest, path: web::Path<(String, String, String)>) -> impl Responder {
+    let (deployment_id, module_name, filename) = path.into_inner();
+    let file_path = get_params_path(&deployment_id, &module_name, Some(&filename));
 
     let func_name = function_name!().to_string();
-    let log_msg = format!("Request for module execution result: {}/{}", module_name, filename);
+    let log_msg = format!("Request for module execution result: {}/{}/{}", deployment_id, module_name, filename);
     tokio::spawn(async move {
         send_log("INFO", &log_msg, &func_name, None).await;
     });
@@ -614,6 +631,7 @@ pub async fn get_module_result(req: HttpRequest, path: web::Path<(String, String
         Ok(file) => file.into_response(&req),
         Err(_) => HttpResponse::NotFound().json(json!({
             "error": "Module result file not found",
+            "deployment_id": deployment_id,
             "module": module_name,
             "filename": filename
         })),
@@ -696,7 +714,7 @@ pub async fn run_module_function(
 
     // Serve static file if filename is provided
     if let Some(filename) = maybe_filename {
-        let file_path = PARAMS_FOLDER.join(&module_name).join(&filename);
+        let file_path = get_params_path(&deployment_id, &module_name, Some(&filename));
         let log_msg = format!(
             "Serving file: {}/{}/{}/{}",
             deployment_id.clone(),
@@ -717,6 +735,8 @@ pub async fn run_module_function(
             Ok(file) => file.into_response(&req),
             Err(_) => HttpResponse::NotFound().json(json!({
                 "error": "File not found",
+                "deployment_id": deployment_id,
+                "module": module_name,
                 "filename": filename,
             })),
         };
@@ -737,6 +757,7 @@ pub async fn run_module_function(
     if !deployment.modules.contains_key(&module_name) {
         return HttpResponse::NotFound().json(json!({
             "error": "Module not found in deployment",
+            "deployment_id": deployment_id,
             "module_name": module_name
         }));
     }
@@ -761,7 +782,7 @@ pub async fn run_module_function(
                 .map(sanitize_filename::sanitize)
                 .unwrap_or_else(|| format!("{}_input.dat", param_name));
 
-            let save_path = PARAMS_FOLDER.join(&module_name).join(&filename);
+            let save_path = get_params_path(&deployment_id, &module_name, Some(&filename));
             if let Some(parent) = save_path.parent() {
                 std::fs::create_dir_all(parent).ok();
             }
@@ -837,6 +858,7 @@ pub async fn run_module_function(
     HttpResponse::Ok().json(resp)
 }
 
+
 /// Deletes (removes) an active deployment from memory by its ID.
 ///
 /// This endpoint is typically used when a pipeline or WebAssembly workload
@@ -857,14 +879,102 @@ pub async fn deployment_delete(path: web::Path<String>) -> impl Responder {
 
     let log_msg = format!("Delete request for deployment: {}", deployment_id);
     tokio::spawn(async move {
-            send_log("INFO", &log_msg, &func_name, None
-        ).await;
+        send_log("INFO", &log_msg, &func_name, None).await;
     });
 
     let mut deps = DEPLOYMENTS.lock();
 
     if deps.remove(&deployment_id).is_some() {
-        HttpResponse::Ok().json(json!({ "status": "success" }))
+
+        // Delete deployment JSON file
+        let json_path = get_deployment_path(&deployment_id);
+        if let Err(e) = std::fs::remove_file(&json_path) {
+            let func_name = function_name!().to_string();
+            tokio::spawn(async move {
+                send_log(
+                    "WARN",
+                    &format!("Failed to delete deployment JSON saved on disk {}: {}", json_path.display(), e),
+                    &func_name,
+                    None
+                ).await;
+            });
+        } else {
+            let func_name = function_name!().to_string();
+            tokio::spawn(async move {
+                send_log(
+                    "DEBUG",
+                    &format!("Deleted deployment JSON file: {}", json_path.display()),
+                    &func_name,
+                    None
+                ).await;
+            });
+        }
+
+        // Delete the module and params folders related to this deployment
+        let module_deployment_path = MODULE_FOLDER.join(&deployment_id);
+        let params_deployment_path = PARAMS_FOLDER.join(&deployment_id);
+        if module_deployment_path.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&module_deployment_path) {
+                let func_name = function_name!().to_string();
+                tokio::spawn(async move {
+                    send_log(
+                        "WARN",
+                        &format!("Failed to delete module deployment folder {}: {}", module_deployment_path.display(), e),
+                        &func_name,
+                        None
+                    ).await;
+                });
+            } else {
+                let func_name = function_name!().to_string();
+                tokio::spawn(async move {
+                    send_log(
+                        "DEBUG",
+                        &format!("Deleted module deployment folder: {}", module_deployment_path.display()),
+                        &func_name,
+                        None
+                    ).await;
+                });
+            }
+        }
+        if params_deployment_path.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&params_deployment_path) {
+                let func_name = function_name!().to_string();
+                tokio::spawn(async move {
+                    send_log(
+                        "WARN",
+                        &format!("Failed to delete params deployment folder {}: {}", params_deployment_path.display(), e),
+                        &func_name,
+                        None
+                    ).await;
+                });
+            } else {
+                let func_name = function_name!().to_string();
+                tokio::spawn(async move {
+                    send_log(
+                        "DEBUG",
+                        &format!("Deleted params deployment folder: {}", params_deployment_path.display()),
+                        &func_name,
+                        None
+                    ).await;
+                });
+            }
+        }
+
+        let func_name = function_name!().to_string();
+        let did = deployment_id.clone();
+        tokio::spawn(async move {
+            send_log(
+                "INFO",
+                &format!("Successfully deleted deployment '{}' and all associated files", did),
+                &func_name,
+                None
+            ).await;
+        });
+
+        HttpResponse::Ok().json(json!({ 
+            "status": "success",
+            "message": format!("Deployment '{}' and all associated files deleted", deployment_id)
+        }))
     } else {
         HttpResponse::NotFound().json(json!({
             "error": "Deployment does not exist",
@@ -872,6 +982,7 @@ pub async fn deployment_delete(path: web::Path<String>) -> impl Responder {
         }))
     }
 }
+
 
 /// Creates a new WebAssembly deployment with modules and optional data files.
 ///
@@ -910,6 +1021,19 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
 
     let mut module_configs = Vec::new();
     let mut errors = Vec::new();
+
+    let module_deployment_dir = MODULE_FOLDER.join(&deployment_id);
+    let params_deployment_dir = PARAMS_FOLDER.join(&deployment_id);
+    
+    if let Err(e) = std::fs::create_dir_all(&module_deployment_dir) {
+        send_log("ERROR", &format!("Failed to create module directory for deployment: {}", e), &func_name, None).await;
+        return HttpResponse::InternalServerError().json(json!({ "error": format!("Failed to create deployment directories: {}", e) }));
+    }
+    
+    if let Err(e) = std::fs::create_dir_all(&params_deployment_dir) {
+        send_log("ERROR", &format!("Failed to create params directory for deployment: {}", e), &func_name, None).await;
+        return HttpResponse::InternalServerError().json(json!({ "error": format!("Failed to create deployment directories: {}", e) }));
+    }
 
     for module in modules {
         let id = module.get("id").and_then(Value::as_str).unwrap_or("unknown").to_string();
@@ -960,11 +1084,7 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
             }
         };
 
-        let binary_path = get_module_path(&name);
-        if let Some(parent) = binary_path.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-
+        let binary_path = get_module_path(&deployment_id, &name);
         if let Err(e) = std::fs::write(&binary_path, &bin_bytes) {
             let err = json!({ "error": format!("Failed to write binary: {}", e), "path": binary_path });
             send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
@@ -972,9 +1092,13 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
             continue;
         }
 
-        // Create the params folder by default
-        let path = get_params_path(&name, None);
-        std::fs::create_dir_all(path).ok();
+        let module_params_path = get_params_path(&deployment_id, &name, None);
+        if let Err(e) = std::fs::create_dir_all(&module_params_path) {
+            let err = json!({ "error": format!("Failed to create params directory: {}", e), "module": name });
+            send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
+            errors.push(err);
+            continue;
+        }
 
         let mut data_files = HashMap::new();
         if let Some(other_map) = module.get("urls")
@@ -987,7 +1111,7 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
                         Ok(resp) if resp.status().is_success() => {
                             match resp.bytes().await {
                                 Ok(file_bytes) => {
-                                    let path = get_params_path(&name, Some(filename));
+                                    let path = get_params_path(&deployment_id, &name, Some(filename));
                                     if let Some(parent) = path.parent() {
                                         std::fs::create_dir_all(parent).ok();
                                     }
@@ -1040,7 +1164,7 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
             }
         }
 
-        // Construct module config and apply model detection
+        // Construct module config
         let mut config = ModuleConfig {
             id,
             name: name.clone(),
@@ -1064,8 +1188,9 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
     // Initialize Wasmtime runtimes for each module with their param folders mounted
     let mut runtimes = HashMap::new();
     for config in &module_configs {
+        let module_params_dir = get_params_path(&deployment_id, &config.name, None);
         match WasmtimeRuntime::new(vec![
-            (get_params_path(&config.name, None).to_string_lossy().to_string(), ".".to_string())
+            (module_params_dir.to_string_lossy().to_string(), ".".to_string())
         ]).await {
             Ok(runtime) => {
                 runtimes.insert(config.name.clone(), runtime);
@@ -1126,7 +1251,22 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
         mounts,
     );
 
-    DEPLOYMENTS.lock().insert(deployment_id.clone(), deployment); // TODO: The lock can become poisoned if something panics and DEPLOYMENTS is locked
+    // Save deployment to disk as JSON
+    if let Err(e) = save_deployment_to_disk(&deployment) {
+        send_log(
+            "ERROR",
+            &format!("Failed to save deployment {} to disk: {}", deployment_id, e),
+            &func_name,
+            None
+        ).await;
+
+        return HttpResponse::InternalServerError().json(json!({
+            "error": "Deployment failed to save to disk",
+            "details": e
+        }));
+    }
+
+    DEPLOYMENTS.lock().insert(deployment_id.clone(), deployment);
 
     send_log("INFO", &format!("Deployment created: {}", deployment_id), &func_name, None).await;
 
@@ -1136,7 +1276,18 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
     }))
 }
 
-/// Configures the HTTP routes for the Wasm supervisor API.
+
+pub async fn deployment_get() -> impl Responder {
+    let deps = DEPLOYMENTS.lock();
+    let d: Vec<&Deployment> = deps.iter().map(|(_id, deployment)| deployment).collect();
+    HttpResponse::Ok().json(json!({
+        "deployments": d
+    }))
+}
+
+
+/// Configures the HTTP routes for the Wasm supervisor API,
+/// and also loads deployments into memory if any are saved on disk
 ///
 /// This function sets up all the endpoints used for:
 /// - Device metadata and health checks
@@ -1162,7 +1313,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route("/register", web::post().to(register_orchestrator))
 
         // Fetch result files generated by module execution
-        .route("/module_results/{module_name}/{filename}", web::get().to(get_module_result))
+        .route("/module_results/{deployment_id}/{module_name}/{filename}", web::get().to(get_module_result))
 
         // Fetch execution history (entire list or single entry by ID)
         .route("/request-history/{request_id}", web::get().to(request_history_list))
@@ -1173,7 +1324,6 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 
         // Run a module function (GET: immediate execution, no input files)
         .route("/{deployment_id}/modules/{module_name}/{function_name}", web::get().to(run_module_function_3))
-        // Supposedly this doesn't match:   /67ebca4c67d46c4d7f551bea/modules/fibo/fibo?param0=7
 
         // Run a module function (POST: allows input files via multipart)
         .route("/{deployment_id}/modules/{module_name}/{function_name}", web::post().to(run_module_function_3))
@@ -1181,8 +1331,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         // Delete an existing deployment by ID
         .route("/deploy/{deployment_id}", web::delete().to(deployment_delete))
 
+        // Get a list of all deployments currently active on this device
+        .route("/deploy", web::get().to(deployment_get))
+
         // Create a new deployment with modules and optional mount/config data
         .route("/deploy", web::post().to(deployment_create))
         .route("//deploy", web::post().to(deployment_create)); // This is needed for current version of orchestrator for some reason
 }
-
