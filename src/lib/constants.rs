@@ -184,8 +184,19 @@ pub fn ensure_required_folders() {
     fs::create_dir_all(&*PARAMS_FOLDER).expect("Failed to create params folder");
 }
 
+/// Helper function to get timeout from env
+pub fn get_module_timeout() -> u64 {
+    std::env::var("WASMIOT_MODULE_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_MODULE_TIMEOUT_SECONDS)
+}
+
 pub const DEFAULT_SERVICE_RENEWAL_TIME: i64 = 900;  // 15 minutes in seconds
 
 pub(crate) static SYSTEM: Lazy<Mutex<System>> = Lazy::new(|| Mutex::new(System::new_all()));
 pub(crate) static NETWORKS: Lazy<Mutex<Networks>> = Lazy::new(|| Mutex::new(Networks::new_with_refreshed_list()));
 pub(crate) static DISKS: Lazy<Mutex<Disks>> = Lazy::new(|| Mutex::new(Disks::new_with_refreshed_list()));
+
+/// Default timeout for module execution in seconds
+pub const DEFAULT_MODULE_TIMEOUT_SECONDS: u64 = 10;
