@@ -2,6 +2,9 @@
 
 Rust version of the existing wasmiot supervisor (found in https://github.com/LiquidAI-project/wasmiot-supervisor)
 
+Newest versions of this are no longer compatible with the javascript version of the orchestrator. Last commit that is likely to work with javascript orchestrator is [`da21d75`](https://github.com/LiquidAI-project/supervisor-rust-port/commit/da21d75659f1ac82dc71eae88b80a1ed032ab446).
+
+
 Full functionality requires a 64bit device, but limited version (missing wasmtime_wasi) can (in future, currently broken) be compiled for 32bit armv6 architectures as well by enabling the "armv6" feature flag. 
 
 Can also be ran in a docker container. When doing that, the container should be rebuilt every time with `--force-recreate` flag to avoid some issues with avahi-daemon.

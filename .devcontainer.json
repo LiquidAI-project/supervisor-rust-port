@@ -10,6 +10,7 @@
       "--device=/dev/video0:/dev/video0",
       "--privileged"
     ],
+    "remoteUser": "root",
     "customizations": {
       "vscode": {
         "extensions": [

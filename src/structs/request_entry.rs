@@ -33,6 +33,9 @@ pub struct RequestEntry {
     pub outputs: Vec<String>,
     /// Indicates whether the execution succeeded.
     pub success: bool,
+    /// Number that indicates which step of the deployment the supervisor executes/executed.
+    /// Used as a fallback in situations where the deployment has multiple identical steps for same device.
+    pub step_index: usize
 }
 
 impl RequestEntry {
@@ -45,6 +48,7 @@ impl RequestEntry {
         request_args: Value,
         request_files: HashMap<String, String>,
         work_queued_at: DateTime<Utc>,
+        step_index: usize,
     ) -> Self {
         let mut entry = RequestEntry {
             request_id: String::new(),
@@ -58,6 +62,7 @@ impl RequestEntry {
             result: None,
             outputs: Vec::new(),
             success: false,
+            step_index: step_index,
         };
         entry.init_request_id();
         entry

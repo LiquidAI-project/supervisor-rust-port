@@ -11,11 +11,14 @@
 //!
 //! This module is intended to centralize all shared, immutable configuration used across the system.
 
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 use std::fs;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use sysinfo::{System, Networks, Disks};
+
+use crate::structs::deployment_supervisor::Deployment;
+use crate::structs::request_entry::RequestEntry;
 
 /// Default port used when running the service.
 pub const DEFAULT_PORT: u16 = 8080;
@@ -37,6 +40,9 @@ pub const PARAMS_FOLDER_NAME: &str = "wasm-params";
 
 /// Folder name where deployments are stored.
 pub const DEPLOYMENTS_FOLDER_NAME: &str = "deployments";
+
+/// Max amount of steps allowed in a single deployment chain.
+pub const MAX_DEPLOYMENT_STEPS: usize = 100;
 
 /// Root path where everything related to this instance of service are stored into
 ///
@@ -200,3 +206,14 @@ pub(crate) static DISKS: Lazy<Mutex<Disks>> = Lazy::new(|| Mutex::new(Disks::new
 
 /// Default timeout for module execution in seconds
 pub const DEFAULT_MODULE_TIMEOUT_SECONDS: u64 = 10;
+
+/// Global in-memory storage of active deployments.
+///
+/// Maps a deployment ID to its corresponding `Deployment` struct,
+/// including runtime environments, modules, instructions and mounts.
+pub static DEPLOYMENTS: Lazy<Mutex<HashMap<String, Deployment>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// History of request executions, including success/failure and output data.
+///
+/// This mirrors `request_history` in the original Python code.
+pub static REQUEST_HISTORY: Lazy<Mutex<Vec<RequestEntry>>> = Lazy::new(|| Mutex::new(Vec::new()));
