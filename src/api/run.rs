@@ -415,18 +415,43 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
 
     // If there is a next call, chain it
     if let Some(call_data) = next_call {
+
         // Prepare file parts (if any)
         let mut files = HashMap::new();
+        let current_module_cfg = deployment.modules
+            .get(&entry.module_name)
+            .ok_or_else(|| format!("Module config not found for '{}'", entry.module_name))?;
+        let current_params_dir =
+            get_params_path(&entry.deployment_id, &current_module_cfg.id, None);
+
+        // if let EndpointData::StrList(file_names) = &call_data.files {
+        //     for name in file_names {
+        //         let full_path = current_params_dir.join(name);
+        //         let file = std::fs::File::open(&full_path)
+        //             .map_err(|e| format!(
+        //                 "Failed to open file for subcall ({}): {}",
+        //                 full_path.display(),
+        //                 e
+        //             ))?;
+        //         files.insert(name.clone(), file);
+        //     }
+        // }
+
         match &call_data.files {
             EndpointData::StrList(file_names) => {
                 for name in file_names {
-                    let full_path = get_params_path(&entry.deployment_id, &entry.module_name, Some(name));
+                    let full_path = current_params_dir.join(name);
                     let file = std::fs::File::open(&full_path)
-                        .map_err(|e| format!("Failed to open file for subcall: {}", e))?;
+                        .map_err(|e| format!(
+                            "Failed to open file for subcall ({}): {}",
+                            full_path.display(),
+                            e
+                        ))?;
                     files.insert(name.clone(), file);
                 }
             }
         }
+
 
         // Build headers (include incremented step)
         let mut headers = reqwest::header::HeaderMap::new();
@@ -491,6 +516,18 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
             .json()
             .await
             .map_err(|e| format!("Invalid response JSON from {}: {}", call_data.url, e))?;
+
+        if let Some(res_val) = chained_json.get("result") {
+            let final_val = match res_val {
+                Value::Object(map) if map.contains_key("result") => {
+                    map.get("result").cloned().unwrap_or(res_val.clone())
+                }
+                _ => res_val.clone(),
+            };
+
+            entry.success = true;
+            return Ok(final_val);
+        }
 
         // If there's a resultUrl, fetch it (also expected to be JSON)
         if let Some(url) = chained_json.get("resultUrl").and_then(|v| v.as_str()) {

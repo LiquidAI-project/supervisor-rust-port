@@ -1,7 +1,6 @@
 use crate::structs::module_orchestrator::MountStage;
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
-use mongodb::bson::oid::ObjectId;
 use crate::structs::openapi::{
     OpenApiEncodingObject,
     OpenApiParameterObject,
@@ -9,11 +8,11 @@ use crate::structs::openapi::{
 };
 
 
-/// Top level structure of the deployment document
+/// Top level structure of the deployment document as sent to supervisors
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeploymentDoc {
     #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
-    pub id: Option<ObjectId>,
+    pub id: Option<String>,
     pub name: String,
     #[serde(rename = "validationError", skip_serializing_if = "Option::is_none")]
     pub validation_error: Option<String>,
@@ -21,6 +20,8 @@ pub struct DeploymentDoc {
     pub full_manifest: FullManifest,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active: Option<bool>,
+    #[serde(rename = "myId")]
+    pub my_id: String,
 }
 
 
@@ -35,14 +36,11 @@ pub struct FullManifest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Step {
     /// The id of the device where this step is to be executed.
-    /// Devices don't know their own ids, so orchestrator has to supply it
-    /// during deployment.
     #[serde(rename = "deviceId")]
-    pub device_id: ObjectId,
-    /// The id of the deployment this step belongs to. Used
-    /// on the supervisors.
+    pub device_id: String,
+    /// The id of the deployment this step belongs to.
     #[serde(rename = "deploymentId")]
-    pub deployment_id: ObjectId,
+    pub deployment_id: String,
     /// Information on the module used in this step.
     pub module: DeviceModule,
     /// Name of the function to execute in this step.
@@ -112,7 +110,7 @@ pub struct DeviceModuleUrls {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceModule {
-    pub id: ObjectId,
+    pub id: String,
     pub name: String,
     pub urls: DeviceModuleUrls,
 }
@@ -125,6 +123,7 @@ pub struct MultipartMediaType {
     pub encoding: HashMap<String, OpenApiEncodingObject>,
 }
 
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaObject {
     #[serde(rename = "type")]
@@ -132,6 +131,7 @@ pub struct SchemaObject {
     #[serde(default)]
     pub properties: HashMap<String, SchemaProperty>,
 }
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaProperty {
@@ -141,6 +141,7 @@ pub struct SchemaProperty {
     pub format: Option<String>,
 }
 
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MountPathFile {
     pub path: String,
@@ -149,11 +150,9 @@ pub struct MountPathFile {
     pub stage: Option<MountStage>,
 }
 
+
 impl MountPathFile {
-    /// Does validation and collects mounts into MountPathFiles
     pub fn list_from_multipart(m_obj: &MultipartMediaType) -> Result<Vec<MountPathFile>, String> {
-        
-        // Validation
         if m_obj.media_type != "multipart/form-data" {
             return Err(format!(
                 "Expected multipart/form-data, got '{:?}'",
@@ -167,10 +166,9 @@ impl MountPathFile {
             ));
         }
         if m_obj.schema.properties.is_empty() {
-            return Err(format!("Expected properties for multipart schema, properties was empty instead."));
+            return Err("Expected properties for multipart schema, properties was empty instead.".to_string());
         }
 
-        // Collect mounts
         let mut mounts: Vec<MountPathFile> = Vec::new();
         for (path, property) in &m_obj.schema.properties {
             let is_binary = property.r#type == "string" && matches!(property.format.as_deref(), Some("binary"));
@@ -191,6 +189,7 @@ impl MountPathFile {
     }
 }
 
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StageMounts {
     #[serde(default)]
@@ -200,5 +199,3 @@ pub struct StageMounts {
     #[serde(default)]
     pub output: Vec<MountPathFile>,
 }
-
-

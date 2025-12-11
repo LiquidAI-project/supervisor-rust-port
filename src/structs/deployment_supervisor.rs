@@ -12,6 +12,8 @@
 //! endpoints, and preparing module invocations.
 
 
+use crate::structs::deployment_orchestrator as orch;
+use crate::structs::openapi::{OpenApiSchemaObject, OpenApiFormat, OpenApiParameterObject};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::fmt::Debug;
@@ -25,7 +27,7 @@ use serde_json::Map;
 use std::iter::Iterator;
 use strum_macros::{EnumString, AsRefStr};
 use wasmtime::{Val, ValType};
-use crate::lib::constants::{PARAMS_FOLDER, FILE_TYPES};
+use crate::lib::constants::{FILE_TYPES};
 use crate::lib::wasmtime::{WasmtimeRuntime, WasmtimeModule, ModuleConfig};
 use indexmap::IndexMap;
 use crate::lib::utils::{can_be_represented_as_wasm_primitive, module_mount_path};
@@ -185,7 +187,7 @@ impl From<String> for SchemaFormat {
 /// - Primitive types (like string/integer)
 /// - Binary payloads
 /// - Nested properties (for objects)
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Schema {
     /// The top-level type (e.g. string, object, etc.)
     pub r#type: SchemaType,
@@ -228,11 +230,83 @@ impl From<HashMap<String, Value>> for Schema {
     }
 }
 
+// Helpers to map orchestrator schema into supervisor schema 
+
+fn map_schema_type(t: &Option<String>) -> SchemaType {
+    match t.as_deref() {
+        Some("integer") => SchemaType::INTEGER,
+        Some("string")  => SchemaType::STRING,
+        Some("object")  => SchemaType::OBJECT,
+        _               => SchemaType::UNKNOWN,
+    }
+}
+
+fn map_schema_format(fmt: &Option<OpenApiFormat>) -> Option<SchemaFormat> {
+    match fmt {
+        Some(OpenApiFormat::Binary) => Some(SchemaFormat::BINARY),
+        _ => None,
+    }
+}
+
+fn convert_schema_object(o: &Option<OpenApiSchemaObject>) -> Schema {
+    if let Some(obj) = o {
+        Schema {
+            r#type: map_schema_type(&obj.r#type),
+            format: map_schema_format(&obj.format),
+            properties: None,
+        }
+    } else {
+        Schema::new(SchemaType::UNKNOWN, None, None)
+    }
+}
+
+fn convert_parameters(params: &[OpenApiParameterObject]) -> Vec<HashMap<String, Value>> {
+    params
+        .iter()
+        .map(|p| {
+            let mut m = HashMap::new();
+            m.insert("name".to_string(), Value::String(p.name.clone()));
+            m
+        })
+        .collect()
+}
+
+impl From<orch::OperationRequest> for EndpointRequest {
+    fn from(src: orch::OperationRequest) -> Self {
+        let params = convert_parameters(&src.parameters);
+        EndpointRequest {
+            parameters: params,
+            request_body: None,
+        }
+    }
+}
+
+impl From<orch::OperationResponse> for EndpointResponse {
+    fn from(src: orch::OperationResponse) -> Self {
+        let schema = convert_schema_object(&src.schema);
+        MediaTypeObject::new(src.media_type, schema, None)
+    }
+}
+
+impl From<orch::Endpoint> for Endpoint {
+    fn from(src: orch::Endpoint) -> Self {
+        Endpoint {
+            url: src.url,
+            path: src.path,
+            method: src.method,
+            request: EndpointRequest::from(src.request),
+            response: EndpointResponse::from(src.response),
+        }
+    }
+}
+
+
+
 /// Describes a specific media type (like `application/json` or `image/png`)
 /// along with its expected schema and optional encoding configuration.
 ///
 /// This structure is aligned with the OpenAPI `MediaTypeObject` definition.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MediaTypeObject {
     /// MIME type of the payload (e.g. `"application/json"`)
     pub media_type: String,
@@ -282,7 +356,7 @@ impl From<HashMap<String, Value>> for MediaTypeObject {
 /// Describes the expected request structure for an HTTP-exposed Wasm function.
 ///
 /// Includes parameter maps and an optional body schema.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EndpointRequest {
     /// List of parameter maps (typically query parameters).
     pub parameters: Vec<HashMap<String, Value>>,
@@ -328,7 +402,7 @@ pub type EndpointResponse = MediaTypeObject;
 /// Describes an HTTP-exposed Wasm function including its route, method, input and output schemas.
 ///
 /// This structure defines how a function is invoked, what it accepts, and what it returns.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Endpoint {
     /// The base URL (e.g., `http://host`).
     pub url: String,
@@ -684,12 +758,12 @@ pub struct Deployment {
     pub modules: HashMap<String, ModuleConfig>,
 
     /// Parsed call graph of module functions.
-    #[serde(skip)]
     pub instructions: ModuleLinkMap,
 
     /// Parsed mapping of all mount paths for all functions.
-    #[serde(skip)]
     pub mounts: ModuleMountMap,
+
+    pub step_links: Vec<FunctionLink>
 }
 
 impl Deployment {
@@ -719,6 +793,7 @@ impl Deployment {
             modules: HashMap::new(),
             instructions: HashMap::new(),
             mounts: HashMap::new(),
+            step_links: Vec::new()
         };
         this.init();
         this
@@ -730,61 +805,43 @@ impl Deployment {
     /// - Parses `_instructions` into a call graph of `FunctionLink`s.
     pub fn init(&mut self) {
         // Build module name → config map
+        self.modules.clear();
         for m in &self._modules {
             self.modules.insert(m.name.clone(), m.clone());
         }
 
         // Parse file mounts for each function and stage (DEPLOYMENT, EXECUTION, OUTPUT)
-        for (module_name, functions) in &self._mounts {
-            if let Value::Object(fn_map) = functions {
-                let mut function_mounts = HashMap::new();
-                for (function_name, stage_mounts) in fn_map {
-                    if let Value::Object(stage_map) = stage_mounts {
-                        let mut stage_mounts_parsed = HashMap::new();
-                        for (stage, mounts) in stage_map {
-                            if let Value::Array(mount_list) = mounts {
-                                let parsed_mounts: Vec<MountPathFile> = mount_list
-                                    .iter()
-                                    .filter_map(|m| serde_json::from_value::<MountPathFile>(m.clone()).ok())
-                                    .collect();
-                                stage_mounts_parsed.insert(MountStage::from(stage.clone()), parsed_mounts);
-                            }
-                        }
-                        function_mounts.insert(function_name.clone(), stage_mounts_parsed);
-                    }
-                }
-                self.mounts.insert(module_name.clone(), function_mounts);
-            }
-        }
+        if !self._mounts.is_empty() {
+            let mut new_mounts: ModuleMountMap = HashMap::new();
 
-        // Parse instruction links (how to chain calls between modules/functions)
-        // if let Some(Value::Object(modules)) = self._instructions.get("modules") {
-        //     for (module_name, functions) in modules {
-        //         if let Value::Object(fn_map) = functions {
-        //             let mut function_links = HashMap::new();
-        //             for (function_name, link) in fn_map {
-        //                 if let Value::Object(link_map) = link {
-        //                     let from = link_map.get("from")
-        //                         .and_then(|v| serde_json::from_value::<Endpoint>(v.clone()).ok());
-        //                     let to = link_map.get("to")
-        //                         .and_then(|v| serde_json::from_value::<Endpoint>(v.clone()).ok());
-        //                     if let Some(from_endpoint) = from {
-        //                         function_links.insert(
-        //                             function_name.clone(),
-        //                             FunctionLink { from: from_endpoint, to },
-        //                         );
-        //                     } else {
-        //                         error!("Skipping function link for {}/{}: Missing 'from' field", module_name, function_name);
-        //                     }
-        //                 }
-        //             }
-        //             self.instructions.insert(module_name.clone(), function_links);
-        //         }
-        //     }
-        // } else {
-        //     warn!("No 'modules' key found in `_instructions`. Using empty instructions.");
-        // }
+            for (module_name, functions) in &self._mounts {
+                if let Value::Object(fn_map) = functions {
+                    let mut function_mounts = HashMap::new();
+                    for (function_name, stage_mounts) in fn_map {
+                        if let Value::Object(stage_map) = stage_mounts {
+                            let mut stage_mounts_parsed = HashMap::new();
+                            for (stage, mounts) in stage_map {
+                                if let Value::Array(mount_list) = mounts {
+                                    let parsed_mounts: Vec<MountPathFile> = mount_list
+                                        .iter()
+                                        .filter_map(|m| serde_json::from_value::<MountPathFile>(m.clone()).ok())
+                                        .collect();
+                                    stage_mounts_parsed.insert(MountStage::from(stage.clone()), parsed_mounts);
+                                }
+                            }
+                            function_mounts.insert(function_name.clone(), stage_mounts_parsed);
+                        }
+                    }
+                    new_mounts.insert(module_name.clone(), function_mounts);
+                }
+            }
+
+            self.mounts = new_mounts;
+        }
+        
         if let Some(Value::Object(modules)) = self._instructions.get("modules") {
+            let mut new_instructions: ModuleLinkMap = HashMap::new();
+
             for (module_name, functions) in modules {
                 if let Value::Object(fn_map) = functions {
                     let mut function_links: FunctionLinkMap = HashMap::new();
@@ -795,50 +852,44 @@ impl Deployment {
                             let to = link_map.get("to")
                                 .and_then(|v| serde_json::from_value::<Endpoint>(v.clone()).ok());
                             if let Some(from_endpoint) = from {
-                                function_links.entry(function_name.clone())
+                                function_links
+                                    .entry(function_name.clone())
                                     .or_insert_with(Vec::new)
                                     .push(FunctionLink { from: from_endpoint, to });
                             } else {
-                                error!("Skipping function link for {}/{}: Missing 'from' field", module_name, function_name);
+                                error!(
+                                    "Skipping function link for {}/{}: Missing 'from' field",
+                                    module_name, function_name
+                                );
                             }
                         }
                     }
-                    self.instructions.insert(module_name.clone(), function_links);
+                    new_instructions.insert(module_name.clone(), function_links);
                 }
             }
+
+            self.instructions = new_instructions;
         } else {
-            warn!("No 'modules' key found in `_instructions`. Using empty instructions.");
+            // warn!("No 'modules' key found in `_instructions`. Using empty instructions.");
         }
     }
 
     // Helper function to get the next target endpoint based on the step_index from headers
     pub fn next_target_with_index(
         &self,
-        module_name: &str,
-        function_name: &str,
+        _module_name: &str,
+        _function_name: &str,
         step_index: usize,
     ) -> Option<&Endpoint> {
-        let mod_map = self.instructions.get(module_name)?;
-        let vec = mod_map.get(function_name)?;
-
-        log::info!("Mod_map: {:?}", mod_map);
-        log::info!("Vec: {:?}", vec);
-        log::info!("Step index: {}", step_index);
-        
-        // If step_index is in range, use it, otherwise return None
-        vec.get(step_index).and_then(|link| link.to.as_ref())
+        // Step index is a GLOBAL index into fullManifest.sequence
+        self.step_links
+            .get(step_index)
+            .and_then(|link| link.to.as_ref())
     }
 
     /// Return the next function's endpoint (if any) that this function is supposed to call.
     ///
     /// Returns `None` if this is the terminal function.
-    // pub fn _next_target(&self, module_name: &str, function_name: &str) -> Option<&Endpoint> {
-    //     let mod_map = self.instructions.get(module_name)
-    //         .expect(&format!("Module '{}' not found in instructions", module_name));
-    //     let link = mod_map.get(function_name)
-    //         .expect(&format!("Function '{}' not found in module '{}'", function_name, module_name));
-    //     link.to.as_ref()
-    // }
     pub fn _next_target(&self, module_name: &str, function_name: &str) -> Option<&Endpoint> {
         let mod_map = self.instructions.get(module_name)
             .expect(&format!("Module '{}' not found in instructions", module_name));
@@ -906,6 +957,10 @@ impl Deployment {
         let all_mounts = deployment_stage_mount_paths.iter()
             .chain(execution_stage_mount_paths.iter())
             .chain(output_stage_mount_paths.iter());
+        let module_cfg = self.modules
+            .get(module_name)
+            .ok_or_else(|| format!("Module '{}' not found in self.modules", module_name))?;
+
 
         // Copy input files to expected mount paths
         for mount in all_mounts {
@@ -927,7 +982,9 @@ impl Deployment {
                 return Err(format!("Missing input file: {}", mount.path));
             };
 
-            let host_path = module_mount_path(deployment_id, module_name, &mount.path);
+            // let host_path = module_mount_path(deployment_id, module_name, &mount.path);
+            let host_path = module_mount_path(deployment_id, &module_cfg.id, &mount.path);
+
             if host_path != temp_source_path {
                 match fs::copy(&temp_source_path, &host_path) {
                     Ok(_) => {},
@@ -969,18 +1026,29 @@ impl Deployment {
             .get(module_name)
             .ok_or_else(|| format!("Module '{}' not found in self.modules", module_name))?;
 
-        if !self.runtimes.contains_key(module_name) {
-            let host_dir = PARAMS_FOLDER
-                .join(deployment_id)
-                .join(module_name)
-                .to_string_lossy()
-                .to_string();
+        // if !self.runtimes.contains_key(module_name) {
+        //     let host_dir = PARAMS_FOLDER
+        //         .join(deployment_id)
+        //         .join(module_name)
+        //         .to_string_lossy()
+        //         .to_string();
 
+        //     let mounts = vec![(host_dir, ".".to_string())];
+
+        //     let runtime = WasmtimeRuntime::new(mounts).await
+        //         .map_err(|e| format!("Failed to initialize runtime for module '{}': {}", module_name, e))?;
+
+        //     self.runtimes.insert(module_name.to_string(), runtime);
+        // }
+        if !self.runtimes.contains_key(module_name) {
+            use crate::lib::utils::get_params_path;
+
+            let module_params_dir = get_params_path(deployment_id, &config.id, None);
+            let host_dir = module_params_dir.to_string_lossy().to_string();
             let mounts = vec![(host_dir, ".".to_string())];
 
             let runtime = WasmtimeRuntime::new(mounts).await
                 .map_err(|e| format!("Failed to initialize runtime for module '{}': {}", module_name, e))?;
-
             self.runtimes.insert(module_name.to_string(), runtime);
         }
 

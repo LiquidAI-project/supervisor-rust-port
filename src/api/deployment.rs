@@ -6,7 +6,18 @@ use crate::function_name;
 use crate::lib::utils::{get_deployment_path, get_module_path, get_params_path, save_deployment_to_disk};
 use crate::lib::wasmtime::{WasmtimeRuntime, ModuleConfig};
 use crate::lib::constants::{DEPLOYMENTS, MODULE_FOLDER, PARAMS_FOLDER};
-use crate::structs::deployment_supervisor::{Deployment, Endpoint, ModuleEndpointMap};
+use crate::structs::deployment_supervisor::{
+    Deployment,
+    Endpoint,
+    ModuleEndpointMap,
+    ModuleLinkMap,
+    ModuleMountMap,
+    FunctionLink,
+    MountStage,
+    MountPathFile,
+};
+use crate::structs::deployment_orchestrator::{DeploymentDoc as OrchDeploymentDoc, Step as OrchStep};
+
 
 
 
@@ -30,71 +41,118 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
 
     let data = payload.into_inner();
 
-    let deployment_id = match data["deploymentId"].as_str() {
-        Some(s) => s.to_string(),
-        None => {
-            send_log("ERROR", "Missing deploymentId", &func_name, None).await;
-            return HttpResponse::BadRequest().json(json!({ "error": "Missing deploymentId" }));
+    // Parse orchestrator deployment doc
+    let orch_dep: OrchDeploymentDoc = match serde_json::from_value(data.clone()) {
+        Ok(d) => d,
+        Err(e) => {
+            send_log(
+                "ERROR",
+                &format!("Failed to parse orchestrator deployment doc: {}", e),
+                &func_name,
+                None,
+            )
+            .await;
+            return HttpResponse::BadRequest().json(json!({
+                "error": format!("Invalid deployment document: {}", e)
+            }));
         }
     };
 
-    let modules = match data["modules"].as_array() {
-        Some(arr) if !arr.is_empty() => arr,
-        _ => {
-            send_log("ERROR", "No modules provided", &func_name, None).await;
-            return HttpResponse::BadRequest().json(json!({ "error": "No modules provided in deployment request" }));
-        }
-    };
+    let my_id = orch_dep.my_id.clone();
+    if my_id.is_empty() {
+        send_log("ERROR", "Missing myId in deployment", &func_name, None).await;
+        return HttpResponse::BadRequest().json(json!({ "error": "Missing myId in deployment" }));
+    }
 
+    let all_steps = orch_dep.full_manifest.sequence.clone();
+
+    // Filter steps for this supervisor based on myId
+    let steps_for_me: Vec<OrchStep> = orch_dep
+        .full_manifest
+        .sequence
+        .into_iter()
+        .filter(|s| s.device_id == my_id)
+        .collect();
+
+    if steps_for_me.is_empty() {
+        send_log(
+            "ERROR",
+            "No steps in fullManifest.sequence for this device",
+            &func_name,
+            None,
+        )
+        .await;
+        return HttpResponse::BadRequest().json(json!({
+            "error": "No steps in fullManifest.sequence for this device"
+        }));
+    }
+
+    // Use the deploymentId from first step (all steps share same deploymentId)
+    let deployment_id = steps_for_me[0].deployment_id.clone();
+
+    // Collect unique modules used by this device ( HashMap<module.id, (module_name, DeviceModule)> )
+    let mut module_map: HashMap<String, (String, crate::structs::deployment_orchestrator::DeviceModule)> = HashMap::new();
+
+    for step in &steps_for_me {
+        let m = &step.module;
+        module_map
+            .entry(m.id.clone())
+            .or_insert_with(|| (m.name.clone(), m.clone()));
+    }
+
+    if module_map.is_empty() {
+        send_log("ERROR", "No modules found in steps for this device", &func_name, None).await;
+        return HttpResponse::BadRequest().json(json!({
+            "error": "No modules found in steps for this device"
+        }));
+    }
+
+    // Prepare deployment related directories
+    let module_deployment_dir = MODULE_FOLDER.join(&deployment_id);
+    let params_deployment_dir = PARAMS_FOLDER.join(&deployment_id);
+
+    if let Err(e) = std::fs::create_dir_all(&module_deployment_dir) {
+        send_log(
+            "ERROR",
+            &format!("Failed to create module directory for deployment: {}", e),
+            &func_name,
+            None,
+        )
+        .await;
+        return HttpResponse::InternalServerError().json(json!({
+            "error": format!("Failed to create deployment directories: {}", e)
+        }));
+    }
+
+    if let Err(e) = std::fs::create_dir_all(&params_deployment_dir) {
+        send_log(
+            "ERROR",
+            &format!("Failed to create params directory for deployment: {}", e),
+            &func_name,
+            None,
+        )
+        .await;
+        return HttpResponse::InternalServerError().json(json!({
+            "error": format!("Failed to create deployment directories: {}", e)
+        }));
+    }
+
+    // Download all required files and build ModuleConfig
     let mut module_configs = Vec::new();
     let mut errors = Vec::new();
 
-    let module_deployment_dir = MODULE_FOLDER.join(&deployment_id);
-    let params_deployment_dir = PARAMS_FOLDER.join(&deployment_id);
-    
-    if let Err(e) = std::fs::create_dir_all(&module_deployment_dir) {
-        send_log("ERROR", &format!("Failed to create module directory for deployment: {}", e), &func_name, None).await;
-        return HttpResponse::InternalServerError().json(json!({ "error": format!("Failed to create deployment directories: {}", e) }));
-    }
-    
-    if let Err(e) = std::fs::create_dir_all(&params_deployment_dir) {
-        send_log("ERROR", &format!("Failed to create params directory for deployment: {}", e), &func_name, None).await;
-        return HttpResponse::InternalServerError().json(json!({ "error": format!("Failed to create deployment directories: {}", e) }));
-    }
-
-    for module in modules {
-        let id = module.get("id").and_then(Value::as_str).unwrap_or("unknown").to_string();
-        let name = match module.get("name").and_then(Value::as_str) {
-            Some(n) => n.to_string(),
-            None => {
-                let err = json!({ "error": "Module missing name", "module": module });
-                send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
-                errors.push(err);
-                continue;
-            }
-        };
-
-        // Fetch binary
-        let binary_url = match module.get("urls").and_then(|urls| urls.get("binary")).and_then(Value::as_str) {
-            Some(url) => url.to_string(),
-            None => {
-                let err = json!({ "error": "Module missing binary URL", "module": name });
-                send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
-                errors.push(err);
-                continue;
-            }
-        };
-
+    for (module_id, (module_name, module)) in &module_map {
+        let binary_url = module.urls.binary.clone();
         let bin_response = match reqwest::get(&binary_url).await {
             Ok(resp) if resp.status().is_success() => resp,
             Ok(resp) => {
-                let err = json!({ "error": format!("Binary URL returned {}", resp.status()), "module": name });
+                let err = json!({ "error": format!("Binary URL returned {}", resp.status()), "module": module_name });
                 send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
                 errors.push(err);
                 continue;
             }
             Err(e) => {
-                let err = json!({ "error": format!("Failed to fetch binary: {}", e), "module": name });
+                let err = json!({ "error": format!("Failed to fetch binary: {}", e), "module": module_name });
                 send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
                 errors.push(err);
                 continue;
@@ -104,14 +162,14 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
         let bin_bytes = match bin_response.bytes().await {
             Ok(bytes) => bytes,
             Err(e) => {
-                let err = json!({ "error": format!("Failed to read binary response: {}", e), "module": name });
+                let err = json!({ "error": format!("Failed to read binary response: {}", e), "module": module_name });
                 send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
                 errors.push(err);
                 continue;
             }
         };
 
-        let binary_path = get_module_path(&deployment_id, &name);
+        let binary_path = get_module_path(&deployment_id, module_id);
         if let Err(e) = std::fs::write(&binary_path, &bin_bytes) {
             let err = json!({ "error": format!("Failed to write binary: {}", e), "path": binary_path });
             send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
@@ -119,82 +177,74 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
             continue;
         }
 
-        let module_params_path = get_params_path(&deployment_id, &name, None);
+        let module_params_path = get_params_path(&deployment_id, module_id, None);
         if let Err(e) = std::fs::create_dir_all(&module_params_path) {
-            let err = json!({ "error": format!("Failed to create params directory: {}", e), "module": name });
+            let err = json!({ "error": format!("Failed to create params directory: {}", e), "module": module_name });
             send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
             errors.push(err);
             continue;
         }
 
         let mut data_files = HashMap::new();
-        if let Some(other_map) = module.get("urls")
-            .and_then(|urls| urls.get("other"))
-            .and_then(Value::as_object)
-        {
-            for (filename, url_val) in other_map {
-                if let Some(url) = url_val.as_str() {
-                    match reqwest::get(url).await {
-                        Ok(resp) if resp.status().is_success() => {
-                            match resp.bytes().await {
-                                Ok(file_bytes) => {
-                                    let path = get_params_path(&deployment_id, &name, Some(filename));
-                                    if let Some(parent) = path.parent() {
-                                        std::fs::create_dir_all(parent).ok();
-                                    }
-                                    match std::fs::write(&path, &file_bytes) {
-                                        Ok(_) => {
-                                            data_files.insert(filename.clone(), path.to_string_lossy().to_string());
-                                        }
-                                        Err(e) => {
-                                            let err = json!({
-                                                "error": format!("Failed to save extra file: {}", e),
-                                                "file": filename,
-                                                "module": name
-                                            });
-                                            send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
-                                            errors.push(err);
-                                        }
-                                    }
+        for (filename, url) in &module.urls.other {
+            match reqwest::get(url).await {
+                Ok(resp) if resp.status().is_success() => {
+                    match resp.bytes().await {
+                        Ok(file_bytes) => {
+                            let path = get_params_path(&deployment_id, module_id, Some(filename));
+                            if let Some(parent) = path.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            match std::fs::write(&path, &file_bytes) {
+                                Ok(_) => {
+                                    data_files.insert(filename.clone(), path.to_string_lossy().to_string());
                                 }
                                 Err(e) => {
                                     let err = json!({
-                                        "error": format!("Failed to read extra file bytes: {}", e),
+                                        "error": format!("Failed to save extra file: {}", e),
                                         "file": filename,
-                                        "module": name
+                                        "module": module_name
                                     });
                                     send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
                                     errors.push(err);
                                 }
                             }
                         }
-                        Ok(resp) => {
-                            let err = json!({
-                                "error": format!("Non-200 response for extra file: {}", resp.status()),
-                                "file": filename,
-                                "module": name
-                            });
-                            send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
-                            errors.push(err);
-                        }
                         Err(e) => {
                             let err = json!({
-                                "error": format!("Failed to fetch extra file: {}", e),
+                                "error": format!("Failed to read extra file bytes: {}", e),
                                 "file": filename,
-                                "module": name
+                                "module": module_name
                             });
                             send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
                             errors.push(err);
                         }
                     }
                 }
+                Ok(resp) => {
+                    let err = json!({
+                        "error": format!("Non-200 response for extra file: {}", resp.status()),
+                        "file": filename,
+                        "module": module_name
+                    });
+                    send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
+                    errors.push(err);
+                }
+                Err(e) => {
+                    let err = json!({
+                        "error": format!("Failed to fetch extra file: {}", e),
+                        "file": filename,
+                        "module": module_name
+                    });
+                    send_log("ERROR", &format!("{:?}", err), &func_name, None).await;
+                    errors.push(err);
+                }
             }
         }
 
-        // Construct module config
         let mut config = ModuleConfig {
-            id,
-            name: name.clone(),
+            id: module_id.clone(),
+            name: module_name.clone(),
             path: binary_path,
             data_files,
             ml_model: None,
@@ -212,10 +262,10 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
         }));
     }
 
-    // Initialize Wasmtime runtimes for each module with their param folders mounted
+    // Initialize Wasmtime runtimes for each module
     let mut runtimes = HashMap::new();
     for config in &module_configs {
-        let module_params_dir = get_params_path(&deployment_id, &config.name, None);
+        let module_params_dir = get_params_path(&deployment_id, &config.id, None);
         match WasmtimeRuntime::new(vec![
             (module_params_dir.to_string_lossy().to_string(), ".".to_string())
         ]).await {
@@ -231,61 +281,92 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
         }
     }
 
-    // Convert endpoints (nested map) to expected type
-    let endpoints: ModuleEndpointMap = match data.get("endpoints") {
-        Some(Value::Object(mod_map)) => {
-            let mut result = HashMap::new();
-            for (mod_name, fn_map_val) in mod_map {
-                if let Some(fn_map) = fn_map_val.as_object() {
-                    let mut inner = HashMap::new();
-                    for (fn_name, endpoint_val) in fn_map {
-                        match serde_json::from_value::<Endpoint>(endpoint_val.clone()) {
-                            Ok(endpoint) => {
-                                inner.insert(fn_name.clone(), endpoint);
-                            }
-                            Err(e) => {
-                                return HttpResponse::BadRequest().json(json!({
-                                    "error": format!("Invalid endpoint for '{}::{}': {}", mod_name, fn_name, e)
-                                }));
-                            }
-                        }
-                    }
-                    result.insert(mod_name.clone(), inner);
-                }
+    // Build global step_links from all steps. This information is used in conjunction with step index to determine next step.
+    let mut step_links: Vec<FunctionLink> = Vec::with_capacity(all_steps.len());
+
+    for step in &all_steps {
+        let from_ep = Endpoint::from(step.instructions.from.clone());
+        let to_ep = step.instructions.to.clone().map(Endpoint::from);
+        step_links.push(FunctionLink { from: from_ep, to: to_ep });
+    }
+
+    // Build endpoints, instructions and mounts from steps_for_me
+    // These are only built for steps of deployment that this supervisor is expected to execute.
+    let mut endpoints: ModuleEndpointMap = HashMap::new();
+    let mut instructions_map: ModuleLinkMap = HashMap::new();
+    let mut mounts_map: ModuleMountMap = HashMap::new();
+
+    for step in &steps_for_me {
+        let module_name = step.module.name.clone();
+        let function_name = step.function_name.clone();
+
+        // endpoints
+        endpoints
+            .entry(module_name.clone())
+            .or_insert_with(HashMap::new)
+            .entry(function_name.clone())
+            .or_insert_with(|| Endpoint::from(step.endpoint.clone()));
+
+        // instructions
+        let from_ep = Endpoint::from(step.instructions.from.clone());
+        let to_ep = step.instructions.to.clone().map(Endpoint::from);
+
+        instructions_map
+            .entry(module_name.clone())
+            .or_insert_with(HashMap::new)
+            .entry(function_name.clone())
+            .or_insert_with(Vec::new)
+            .push(FunctionLink { from: from_ep.clone(), to: to_ep.clone() });
+
+        // mounts
+        let fn_stage_map = mounts_map
+            .entry(module_name.clone())
+            .or_insert_with(HashMap::new)
+            .entry(function_name.clone())
+            .or_insert_with(HashMap::new);
+
+        let mut add_stage = |stage: MountStage, orch_mounts: &Vec<crate::structs::deployment_orchestrator::MountPathFile>| {
+            let entry = fn_stage_map.entry(stage).or_insert_with(Vec::new);
+            for m in orch_mounts {
+                entry.push(MountPathFile::new(
+                    m.path.clone(),
+                    m.media_type.clone(),
+                    stage,
+                    None,
+                    None,
+                    None,
+                ));
             }
-            result
-        }
-        _ => HashMap::new(),
-    };
+        };
 
-    // Convert instructions and mounts from Map<String, Value> → HashMap<String, Value>
-    let instructions = data.get("instructions")
-        .and_then(|v| v.as_object())
-        .map(|map| map.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-        .unwrap_or_else(HashMap::new);
+        add_stage(MountStage::DEPLOYMENT, &step.mounts.deployment);
+        add_stage(MountStage::EXECUTION, &step.mounts.execution);
+        add_stage(MountStage::OUTPUT, &step.mounts.output);
+    }
 
-    let mounts = data.get("mounts")
-        .and_then(|v| v.as_object())
-        .map(|map| map.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-        .unwrap_or_else(HashMap::new);
-
-    let deployment = Deployment::new(
+    // Build deployment
+    let mut deployment = Deployment::new(
         deployment_id.clone(),
         runtimes,
         module_configs,
         endpoints,
-        instructions,
-        mounts,
+        HashMap::new(),
+        HashMap::new(),
     );
 
-    // Save deployment to disk as JSON
+    deployment.instructions = instructions_map;
+    deployment.mounts = mounts_map;
+    deployment.step_links = step_links;
+
+    // Save deployment to disk
     if let Err(e) = save_deployment_to_disk(&deployment) {
         send_log(
             "ERROR",
             &format!("Failed to save deployment {} to disk: {}", deployment_id, e),
             &func_name,
-            None
-        ).await;
+            None,
+        )
+        .await;
 
         return HttpResponse::InternalServerError().json(json!({
             "error": "Deployment failed to save to disk",
@@ -295,13 +376,20 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
 
     DEPLOYMENTS.lock().insert(deployment_id.clone(), deployment);
 
-    send_log("INFO", &format!("Deployment created: {}", deployment_id), &func_name, None).await;
+    send_log(
+        "INFO",
+        &format!("Deployment created: {}", deployment_id),
+        &func_name,
+        None,
+    )
+    .await;
 
     HttpResponse::Ok().json(json!({
         "status": "success",
         "deploymentId": deployment_id
     }))
 }
+
 
 
 pub async fn deployment_get() -> impl Responder {
