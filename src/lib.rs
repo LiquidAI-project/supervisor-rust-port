@@ -25,6 +25,10 @@ pub mod lib {
     pub mod table;
     pub mod cast;
     pub mod interuption;
+    pub mod wain_syntax_binary;
+    pub mod error;
+    pub mod parser;
+    pub mod leb128;
 }
 pub mod structs {
     pub mod device;

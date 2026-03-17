@@ -12,6 +12,7 @@
 //! endpoints, and preparing module invocations.
 
 
+use crate::lib::runtime::Runtime;
 use crate::structs::deployment_orchestrator as orch;
 use crate::structs::openapi::{OpenApiSchemaObject, OpenApiFormat, OpenApiParameterObject};
 use std::collections::{HashMap, HashSet};
@@ -739,10 +740,10 @@ pub struct Deployment {
 
     /// WebAssembly runtimes loaded and associated with modules.
     #[serde(skip)]
-    pub runtimes: HashMap<String, WasmtimeRuntime>, //Need to change this to use wain runtime
+    pub runtimes: HashMap<String, Runtime<'module, 'source, I: Importer>>, //Need to change this to use wain runtime
 
     /// The initial module configs (before parsing into indexed map).
-    pub _modules: Vec<ModuleConfig>,
+    pub _modules: Vec<ModuleConfig>, //This probaply needs to be a Vec of wain_ast::Root<'_, S>
 
     /// HTTP endpoints defined for each function in each module.
     pub endpoints: ModuleEndpointMap,
@@ -755,7 +756,7 @@ pub struct Deployment {
 
     /// Parsed module configs by name.
     #[serde(skip)]
-    pub modules: HashMap<String, ModuleConfig>,
+    pub modules: HashMap<String, ModuleConfig>, //This probaply needs to be a HashMap  of <String, wain_ast::Root<'_, S>>
 
     /// Parsed call graph of module functions.
     pub instructions: ModuleLinkMap,
@@ -777,7 +778,7 @@ impl Deployment {
     /// - `mounts`: Describes all expected input/output files for each function.
     pub fn new(
         id: String,
-        runtimes: HashMap<String, WasmtimeRuntime>,
+        runtimes: HashMap<String, Runtime<'module, 'source, I: Importer>>,
         module_configs: Vec<ModuleConfig>,
         endpoints: ModuleEndpointMap,
         instructions: HashMap<String, Value>,
@@ -1046,9 +1047,9 @@ impl Deployment {
             let module_params_dir = get_params_path(deployment_id, &config.id, None);
             let host_dir = module_params_dir.to_string_lossy().to_string();
             let mounts = vec![(host_dir, ".".to_string())];
-
-            let runtime = WasmtimeRuntime::new(mounts).await //Create new wain runtime
-                .map_err(|e| format!("Failed to initialize runtime for module '{}': {}", module_name, e))?;
+            //cofing.path should be the path to .wasm file on disk
+            //let runtime = WasmtimeRuntime::new(mounts).await //Create new wain runtime
+            //    .map_err(|e| format!("Failed to initialize runtime for module '{}': {}", module_name, e))?;
             self.runtimes.insert(module_name.to_string(), runtime);
         }
 
