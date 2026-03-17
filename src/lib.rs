@@ -13,6 +13,18 @@ pub mod lib {
     pub mod logging;
     pub mod deployment;
     pub mod utils;
+    pub mod runtime;
+    pub mod globals;
+    pub mod trap;
+    pub mod value;
+    pub mod wain_ast;
+    pub mod source;
+    pub mod import;
+    pub mod memory;
+    pub mod stack;
+    pub mod table;
+    pub mod cast;
+    pub mod interuption;
 }
 pub mod structs {
     pub mod device;
