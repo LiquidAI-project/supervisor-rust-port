@@ -319,7 +319,7 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
         ).await;
     });
 
-    // Execute the wasm module
+    // Execute the wasm module. Change to use wain
     let runtime = deployment.runtimes.get_mut(&entry.module_name)
         .ok_or_else(|| format!("Runtime not found for module '{}'", entry.module_name))?;
 

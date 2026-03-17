@@ -262,7 +262,7 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
         }));
     }
 
-    // Initialize Wasmtime runtimes for each module
+    // Initialize Wasmtime runtimes for each module. Change to create wain runtimes
     let mut runtimes = HashMap::new();
     for config in &module_configs {
         let module_params_dir = get_params_path(&deployment_id, &config.id, None);

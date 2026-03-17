@@ -739,7 +739,7 @@ pub struct Deployment {
 
     /// WebAssembly runtimes loaded and associated with modules.
     #[serde(skip)]
-    pub runtimes: HashMap<String, WasmtimeRuntime>,
+    pub runtimes: HashMap<String, WasmtimeRuntime>, //Need to change this to use wain runtime
 
     /// The initial module configs (before parsing into indexed map).
     pub _modules: Vec<ModuleConfig>,
@@ -1047,7 +1047,7 @@ impl Deployment {
             let host_dir = module_params_dir.to_string_lossy().to_string();
             let mounts = vec![(host_dir, ".".to_string())];
 
-            let runtime = WasmtimeRuntime::new(mounts).await
+            let runtime = WasmtimeRuntime::new(mounts).await //Create new wain runtime
                 .map_err(|e| format!("Failed to initialize runtime for module '{}': {}", module_name, e))?;
             self.runtimes.insert(module_name.to_string(), runtime);
         }
@@ -1056,7 +1056,7 @@ impl Deployment {
             .get_mut(module_name)
             .expect("Runtime must exist after initialization");
 
-        runtime.load_module(config.clone()).await
+        runtime.load_module(config.clone()).await //wain might not need this
             .map_err(|e| format!("Failed to load module: {}", e))?;
 
         let arg_types = runtime.get_arg_types(module_name, function_name).await;
