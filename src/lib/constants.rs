@@ -11,6 +11,8 @@
 //!
 //! This module is intended to centralize all shared, immutable configuration used across the system.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::{collections::HashMap, path::PathBuf};
 use std::fs;
 use once_cell::sync::Lazy;
@@ -78,6 +80,13 @@ pub const CAMERA_FUNCTIONS: &[&str] = &[
 pub const NETWORK_FUNCTIONS: &[&str] = &[
     "ping"
 ];
+
+pub const STD_FUNCTIONS: &[&str] = &[
+    "putchar",
+    "getchar",
+    "memcpy",
+];
+
 
 /// Functions provided by wasip1 for use by modules compiled for wasm32-wasip1 target
 pub const WASI_FUNCTIONS: &[&str] = &[
@@ -150,6 +159,8 @@ pub static SUPERVISOR_INTERFACES: Lazy<Vec<&'static str>> = Lazy::new(|| {
     // Network functionalities
     interfaces.extend_from_slice(NETWORK_FUNCTIONS);
 
+    interfaces.extend_from_slice(STD_FUNCTIONS);
+
     #[cfg(not(feature = "armv6"))]
     {
         // Wasi and wasi-nn functionalities are not available on armv6 architecture
@@ -217,3 +228,9 @@ pub static DEPLOYMENTS: Lazy<Mutex<HashMap<String, Deployment>>> = Lazy::new(|| 
 ///
 /// This mirrors `request_history` in the original Python code.
 pub static REQUEST_HISTORY: Lazy<Mutex<Vec<RequestEntry>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Flag for wain interuption and buffer for snapshot bytes
+
+pub static INTERUPTION: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
+
+pub static SNAPSHOT_BYTES: Lazy<Arc<std::sync::Mutex<Vec<u8>>>> = Lazy::new(|| Arc::new(std::sync::Mutex::new(Vec::new())));

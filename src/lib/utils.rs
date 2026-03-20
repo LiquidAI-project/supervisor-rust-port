@@ -1,4 +1,4 @@
-use std::{fs::File, path::PathBuf};
+use std::{fmt, fs::File, path::PathBuf, process::exit};
 use crate::{lib::constants::{DEPLOYMENTS_FOLDER, MODULE_FOLDER, PARAMS_FOLDER}, structs::deployment_supervisor::{Deployment, Schema, SchemaType}};
 
 
@@ -84,5 +84,15 @@ pub fn get_params_path(deployment_id: &str, module_name: &str, filename: Option<
     match filename {
         Some(file) => base.join(file),
         None => base,
+    }
+}
+
+pub fn unwrap<T, E: fmt::Display>(phase: &'static str, result: Result<T, E>) -> T {
+    match result {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error on {}: {}", phase, e);
+            exit(1)
+        }
     }
 }

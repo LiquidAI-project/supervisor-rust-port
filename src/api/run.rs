@@ -6,20 +6,26 @@ use actix_files::NamedFile;
 use serde_json::{json, Value};
 use chrono::Utc;
 use std::collections::HashMap;
+use std::sync::Arc;
 use log::{debug, error, warn};
 use wasmtime::Val;
 use sanitize_filename;
 use futures_util::StreamExt;
 use std::fs::File;
-use std::env;
+use std::{env, io};
 use std::io::Write;
-use crate::lib::constants::{DEPLOYMENTS, MAX_DEPLOYMENT_STEPS, REQUEST_HISTORY};
+use crate::lib::constants::{DEPLOYMENTS, INTERUPTION, MAX_DEPLOYMENT_STEPS, REQUEST_HISTORY, SNAPSHOT_BYTES};
+use crate::lib::import::DefaultImporter;
+use crate::lib::interuption::interuption_impl::Implementer;
 use crate::lib::logging::send_log;
-use crate::function_name;
+use crate::lib::runtime::Runtime;
+use crate::{function_name, lib};
 use crate::lib::utils::{get_params_path, make_output_url};
 use indexmap::IndexMap;
 use crate::structs::request_entry::RequestEntry;
 use crate::structs::deployment_supervisor::{CallData, EndpointArgs, EndpointData, MountStage};
+use std::fs;
+use crate::lib::utils::{unwrap};
 
 /// Executes a function in a given module in a given deployment.
 ///
@@ -90,7 +96,7 @@ pub async fn run_module_function(
             })),
         };
     }
-
+    
     // Check if deployment and module exist
     let deployments_map = DEPLOYMENTS.lock();
     let deployment = match deployments_map.get(&deployment_id) {
@@ -111,15 +117,16 @@ pub async fn run_module_function(
         }));
     }
     drop(deployments_map); // Free the lock early
-
+    
     // Parse query parameters into JSON
     let query_str = req.uri().query().unwrap_or("");
     let query_map: HashMap<String, String> =
         serde_urlencoded::from_str(query_str).unwrap_or_default();
     let request_args = json!(query_map);
-
+    
     // Handle multipart file uploads (for POST only)
     let mut request_files: HashMap<String, String> = HashMap::new();
+    
     let is_post = req.method() == "POST";
     if is_post {
         let mut multipart = Multipart::new(&req.headers(), payload);
@@ -157,7 +164,7 @@ pub async fn run_module_function(
             request_files.insert(param_name, save_path.to_string_lossy().to_string());
         }
     }
-
+    
     // Create RequestEntry
     let entry = RequestEntry::new(
         deployment_id.clone(),
@@ -295,17 +302,17 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
         ).await;
     });
 
-    let request_args: IndexMap<String, Value> = entry.request_args
+    let _request_args: IndexMap<String, Value> = entry.request_args //Not sure if Wain supports giving args to WebAssembly modules
         .as_object()
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_else(IndexMap::new);
-    let (_module, wasm_args) = deployment.prepare_for_running(
-        &entry.deployment_id,
-        &entry.module_name,
-        &entry.function_name,
-        &request_args,
-        &entry.request_files,
-    ).await?;
+    //let (_module, wasm_args) = deployment.prepare_for_running( //Maybe this preparation phase is not necessary as Wain doesn't take import functions dynamically?
+    //    &entry.deployment_id,
+    //    &entry.module_name,
+    //    &entry.function_name,
+    //    &request_args,
+    //    &entry.request_files,
+    //).await?;
 
     let func_name = function_name!().to_string();
     let entry_function_name = entry.function_name.clone();
@@ -320,16 +327,31 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
     });
 
     // Execute the wasm module. Change to use wain
-    let runtime = deployment.runtimes.get_mut(&entry.module_name)
-        .ok_or_else(|| format!("Runtime not found for module '{}'", entry.module_name))?;
+    //let runtime = deployment.runtimes.get_mut(&entry.module_name)
+    //    .ok_or_else(|| format!("Runtime not found for module '{}'", entry.module_name))?;
+//
+    //let return_count = runtime.get_return_types(&entry.module_name, &entry.function_name).await.len();
+    //let output_vals = runtime.run_function(
+    //    &entry.module_name,
+    //    &entry.function_name,
+    //    Vec::new(),
+    //    return_count,
+    //).await;
+    let output_vals = Vec::new();
 
-    let return_count = runtime.get_return_types(&entry.module_name, &entry.function_name).await.len();
-    let output_vals = runtime.run_function(
-        &entry.module_name,
-        &entry.function_name,
-        wasm_args,
-        return_count,
-    ).await;
+    let config = deployment.modules.get(&entry.module_name.clone()).unwrap();
+    //cofing.path should be the path to .wasm file on disk
+    let bin = fs::read(&config.path).unwrap();
+    let ast = unwrap("", lib::wain_syntax_binary::parse(&bin));
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let importer = DefaultImporter::with_stdio(stdin.lock(), stdout.lock());
+    let interuption_clone = Arc::clone(&INTERUPTION);
+    let snapshot_bytes_ref = Arc::clone(&SNAPSHOT_BYTES);
+    let interuption_implementer = Arc::new(Implementer::new(interuption_clone, snapshot_bytes_ref));
+    let mut runtime = unwrap("",Runtime::instantiate(&ast.module, importer, interuption_implementer));
+    let _ = runtime.invoke("_start", &[]);
+
 
     let raw_output = output_vals.first().map(|v| match v {
         Val::I32(i) => json!(i),

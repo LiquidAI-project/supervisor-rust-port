@@ -7,7 +7,6 @@
     "runArgs": [
       "--network=wasmiot-net",
       "--name=supervisor-dev",
-      "--device=/dev/video0:/dev/video0",
       "--privileged"
     ],
     "remoteUser": "root",

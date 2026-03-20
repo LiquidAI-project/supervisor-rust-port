@@ -12,24 +12,22 @@
 //! endpoints, and preparing module invocations.
 
 
-use crate::lib::runtime::Runtime;
 use crate::structs::deployment_orchestrator as orch;
 use crate::structs::openapi::{OpenApiSchemaObject, OpenApiFormat, OpenApiParameterObject};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::fmt::Debug;
+use std::fmt::{Debug};
 use std::str::FromStr;
 use std::fs::File;
-use std::fs;
+use std::{fs};
 use serde_json::Value;
 use serde::{Deserialize, Serialize};
 use log::{error, warn};
 use serde_json::Map;
 use std::iter::Iterator;
 use strum_macros::{EnumString, AsRefStr};
-use wasmtime::{Val, ValType};
 use crate::lib::constants::{FILE_TYPES};
-use crate::lib::wasmtime::{WasmtimeRuntime, WasmtimeModule, ModuleConfig};
+use crate::lib::wasmtime::{ModuleConfig, WasmtimeRuntime};
 use indexmap::IndexMap;
 use crate::lib::utils::{can_be_represented_as_wasm_primitive, module_mount_path};
 
@@ -733,14 +731,14 @@ pub type ModuleMountMap = HashMap<String, FunctionMountMap>;
 /// - Chain function calls across modules based on user-defined instructions
 ///
 /// This structure mirrors the behavior of the original Python `deployment.py` system.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Deployment {
     /// ID of the deployment (may be used for namespacing or identification).
     pub id: String,
 
     /// WebAssembly runtimes loaded and associated with modules.
     #[serde(skip)]
-    pub runtimes: HashMap<String, Runtime<'module, 'source, I: Importer>>, //Need to change this to use wain runtime
+    pub runtimes: HashMap<String, WasmtimeRuntime>, //Need to change this to use wain runtime
 
     /// The initial module configs (before parsing into indexed map).
     pub _modules: Vec<ModuleConfig>, //This probaply needs to be a Vec of wain_ast::Root<'_, S>
@@ -778,7 +776,7 @@ impl Deployment {
     /// - `mounts`: Describes all expected input/output files for each function.
     pub fn new(
         id: String,
-        runtimes: HashMap<String, Runtime<'module, 'source, I: Importer>>,
+        runtimes: HashMap<String, WasmtimeRuntime>,
         module_configs: Vec<ModuleConfig>,
         endpoints: ModuleEndpointMap,
         instructions: HashMap<String, Value>,
@@ -1012,9 +1010,9 @@ impl Deployment {
         deployment_id: &str,
         module_name: &str,
         function_name: &str,
-        args: &IndexMap<String, Value>,
+        _args: &IndexMap<String, Value>,
         request_filepaths: &HashMap<String, String>,
-    ) -> Result<(WasmtimeModule, Vec<Val>), String> {
+    ) -> Result<(), String> {
         let path_map: HashMap<String, PathBuf> = request_filepaths
             .iter()
             .map(|(k, v)| (k.clone(), PathBuf::from(v)))
@@ -1023,7 +1021,7 @@ impl Deployment {
         self._connect_request_files_to_mounts(deployment_id, module_name, function_name, &path_map)
             .map_err(|e| format!("Mount error: {}", e))?;
 
-        let config = self.modules
+        let _config = self.modules
             .get(module_name)
             .ok_or_else(|| format!("Module '{}' not found in self.modules", module_name))?;
 
@@ -1042,30 +1040,42 @@ impl Deployment {
         //     self.runtimes.insert(module_name.to_string(), runtime);
         // }
         if !self.runtimes.contains_key(module_name) {
-            use crate::lib::utils::get_params_path;
+            //use crate::lib::utils::get_params_path;
+            //use std::fs;
+            //use crate::lib::utils::{unwrap};
 
-            let module_params_dir = get_params_path(deployment_id, &config.id, None);
-            let host_dir = module_params_dir.to_string_lossy().to_string();
-            let mounts = vec![(host_dir, ".".to_string())];
+            //let module_params_dir = get_params_path(deployment_id, &config.id, None);
+            //let host_dir = module_params_dir.to_string_lossy().to_string();
+            //let mounts = vec![(host_dir, ".".to_string())];
             //cofing.path should be the path to .wasm file on disk
             //let runtime = WasmtimeRuntime::new(mounts).await //Create new wain runtime
             //    .map_err(|e| format!("Failed to initialize runtime for module '{}': {}", module_name, e))?;
-            self.runtimes.insert(module_name.to_string(), runtime);
+            //self.runtimes.insert(module_name.to_string(), runtime);
+            //let bin = fs::read(&config.path).unwrap();
+            //let ast = unwrap("", lib::wain_syntax_binary::parse(&bin));
+            //let stdin = io::stdin();
+            //let stdout = io::stdout();
+            //let importer = DefaultImporter::with_stdio(stdin.lock(), stdout.lock());
+            //let interuption_clone = Arc::clone(&INTERUPTION);
+            //let snapshot_bytes_ref = Arc::clone(&SNAPSHOT_BYTES);
+            //let interuption_implementer = Arc::new(Implementer::new(interuption_clone, snapshot_bytes_ref));
+            //let mut runtime = unwrap("",Runtime::instantiate(&ast.module, importer, interuption_implementer));
         }
 
-        let runtime = self.runtimes
-            .get_mut(module_name)
-            .expect("Runtime must exist after initialization");
+        //let runtime = self.runtimes
+        //    .get_mut(module_name)
+        //    .expect("Runtime must exist after initialization");
 
-        runtime.load_module(config.clone()).await //wain might not need this
-            .map_err(|e| format!("Failed to load module: {}", e))?;
+        //runtime.load_module(config.clone()).await //wain might not need this
+        //    .map_err(|e| format!("Failed to load module: {}", e))?;
 
-        let arg_types = runtime.get_arg_types(module_name, function_name).await;
+        //let arg_types = runtime.get_arg_types(module_name, function_name).await;
 
-        let module = runtime.get_module(module_name).await
-            .ok_or_else(|| format!("Module '{}' not found after load", module_name))?;
+        //let module = runtime.get_module(module_name).await
+        //    .ok_or_else(|| format!("Module '{}' not found after load", module_name))?;
 
         // Convert arguments from serde_json::Value → wasmtime::Val based on type hints.
+        /*
         let primitive_args: Vec<Val> = args.values()
             .zip(arg_types.iter())
             .map(|(value, typ)| match typ {
@@ -1102,8 +1112,8 @@ impl Deployment {
                     Val::I32(0)
                 }
             })
-            .collect();
-        Ok((module.clone(), primitive_args))
+            .collect();*/
+        Ok(())
     }
 
 
