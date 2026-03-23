@@ -15,8 +15,8 @@ use log::info;
 use parking_lot::Mutex;
 use supervisor::api::deployment::{deployment_create, deployment_delete, deployment_get};
 use supervisor::api::device::{register_orchestrator, thingi_description, thingi_health, wasmiot_device_description};
-use supervisor::api::results::{get_module_result, request_history_list, request_history_list_1};
-use supervisor::api::run::{run_module_function, run_module_function_3};
+use supervisor::api::results::{get_bytes, get_module_result, request_history_list, request_history_list_1};
+use supervisor::api::run::{interupt, resume, run_module_function, run_module_function_3};
 use supervisor::structs::deployment_supervisor::Deployment;
 use std::sync::Arc;
 use supervisor::lib::{zeroconf, constants};
@@ -228,6 +228,26 @@ async fn main() -> std::io::Result<()> {
                 web::resource("//deploy")
                     .name("//deploy")
                     .route(web::post().to(deployment_create))
+            )
+            // This service is used to interupt the Wain WebAssembly interpreter.
+            // Snapshot of the WebAssembly module will be created.
+            .service(
+                web::resource("/interupt")
+                .name("/interupt")
+                .route(web::get().to(interupt))
+            )
+            // This service is used to get bytes of the created snapshot that result
+            // from interupting the execution of WebAssembly module.
+            .service(
+                web::resource("/getSnapshot")
+                .name("/getSnapshot")
+                .route(web::get().to(get_bytes))
+            )
+            // This service is used to resuming execution of WebAssembly module from snapshot.
+            .service(
+                web::resource("/resume")
+                .name("/resume")
+                .route(web::post().to(resume))
             )
     })
     .bind(("0.0.0.0", port))?;

@@ -1,4 +1,5 @@
 
+use serde::{Deserialize, Serialize};
 use tokio::task;
 use actix_multipart::Multipart;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
@@ -7,6 +8,7 @@ use serde_json::{json, Value};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use log::{debug, error, warn};
 use wasmtime::Val;
 use sanitize_filename;
@@ -18,7 +20,7 @@ use crate::lib::constants::{DEPLOYMENTS, INTERUPTION, MAX_DEPLOYMENT_STEPS, REQU
 use crate::lib::import::DefaultImporter;
 use crate::lib::interuption::interuption_impl::Implementer;
 use crate::lib::logging::send_log;
-use crate::lib::runtime::Runtime;
+use crate::lib::runtime::{Runtime, RuntimeSerialisable, Snapshot};
 use crate::{function_name, lib};
 use crate::lib::utils::{get_params_path, make_output_url};
 use indexmap::IndexMap;
@@ -581,5 +583,39 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
     Ok(json!({ "result": entry.result }))
 }
 
+/// This function is used to interupt the execution of the current WebAssembly module.
+/// Bytes of the created snapshot will be stored into the buffer in SNAPSHOT_BYTES constant.
+pub async fn interupt() -> impl Responder {
+    INTERUPTION.store(true, Ordering::Relaxed);
+    HttpResponse::Ok().json(json!({
+        "status": "success",
+        "message": "Wain succesfully interupted"
+    }))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Resume {
+    pub status: String,
+    pub message: Vec<u8>
+}
 
 
+/// This function is used to resume execution of a WebAssembly module from snapshot.
+/// TODO: Wain must be run in a new thread, otherwise response will be block until
+/// the execution of WebAssembly module is complete. Also maybe some mechanism to
+/// check if Wain is already interpreting some module?
+/// TODO: Response under development
+pub async fn resume(payload: web::Json<Value>) -> impl Responder {
+    let data = payload.into_inner();
+    let snapshot: Resume = serde_json::from_value(data.clone()).unwrap();
+    let binding = snapshot.message;
+    let runtime_serialisable: RuntimeSerialisable = rmp_serde::from_slice(&binding).unwrap();
+    let interuption_clone = Arc::clone(&INTERUPTION);
+    let snapshot_bytes_ref = Arc::clone(&SNAPSHOT_BYTES);
+    let interuption_implementer = Arc::new(Implementer::new(interuption_clone, snapshot_bytes_ref));
+    let _ = runtime_serialisable.resume_execution(interuption_implementer);
+    HttpResponse::Ok().json(json!({
+        "status": "success",
+        "message": "valid snapshot received"
+    }))   
+}

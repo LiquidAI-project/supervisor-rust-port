@@ -3,7 +3,7 @@ use actix_files::NamedFile;
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use serde_json::json;
 
-use crate::{function_name, lib::{constants::REQUEST_HISTORY, logging::send_log, utils::get_params_path}};
+use crate::{function_name, lib::{constants::{REQUEST_HISTORY, SNAPSHOT_BYTES}, logging::send_log, utils::get_params_path}};
 
 
 /// Serves a file produced as output by a WebAssembly module.
@@ -79,4 +79,17 @@ pub async fn request_history_list(path: web::Path<String>) -> impl Responder {
 
         HttpResponse::Ok().json(&*history)
     }
+}
+
+/// This function can be used to get the bytes of the snapshots taken from
+/// WebAssembly modules.
+/// TODO: Response is under development.
+pub async fn get_bytes() -> impl Responder {
+    let mut guarded = SNAPSHOT_BYTES.lock().unwrap(); 
+    let bytes = guarded.clone();
+    *guarded = Vec::new();
+    HttpResponse::Ok().json(json!({
+        "status": "success",
+        "message": bytes
+    }))
 }
