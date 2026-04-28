@@ -543,9 +543,9 @@ impl Snapshot for RuntimeSerialisable<'_> {
     }
 
     fn resume_execution(&self, interuption_method: Arc<Implementer>) -> std::result::Result<(), Box<Trap>> {
-        let stdin = io::stdin();
+        //let stdin = io::stdin();
         let stdout = io::stdout();
-        let importer = DefaultImporter::with_stdio(stdin.lock(), stdout.lock());
+        let importer = DefaultImporter::with_stdio(io::stdin(), stdout.lock());
         let mut runtime = Runtime {
             module: ModuleInstance {
                 ast: &self.module.ast.clone(),

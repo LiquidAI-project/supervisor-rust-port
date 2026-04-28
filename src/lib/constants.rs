@@ -85,6 +85,10 @@ pub const STD_FUNCTIONS: &[&str] = &[
     "putchar",
     "getchar",
     "memcpy",
+    "usleep",
+    "rand",
+    "getchar_nonblocking",
+    "readkey"
 ];
 
 
@@ -234,3 +238,5 @@ pub static REQUEST_HISTORY: Lazy<Mutex<Vec<RequestEntry>>> = Lazy::new(|| Mutex:
 pub static INTERUPTION: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
 pub static SNAPSHOT_BYTES: Lazy<Arc<std::sync::Mutex<Vec<u8>>>> = Lazy::new(|| Arc::new(std::sync::Mutex::new(Vec::new())));
+
+pub static INPUT: Lazy<Arc<std::sync::Mutex<String>>> = Lazy::new(|| Arc::new(std::sync::Mutex::new(" ".to_string())));

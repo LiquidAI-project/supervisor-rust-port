@@ -16,7 +16,7 @@ use futures_util::StreamExt;
 use std::fs::File;
 use std::{env, io};
 use std::io::Write;
-use crate::lib::constants::{DEPLOYMENTS, INTERUPTION, MAX_DEPLOYMENT_STEPS, REQUEST_HISTORY, SNAPSHOT_BYTES};
+use crate::lib::constants::{DEPLOYMENTS, INPUT, INTERUPTION, MAX_DEPLOYMENT_STEPS, REQUEST_HISTORY, SNAPSHOT_BYTES};
 use crate::lib::import::DefaultImporter;
 use crate::lib::interuption::interuption_impl::Implementer;
 use crate::lib::logging::send_log;
@@ -345,9 +345,9 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
     //cofing.path should be the path to .wasm file on disk
     let bin = fs::read(&config.path).unwrap();
     let ast = unwrap("", lib::wain_syntax_binary::parse(&bin));
-    let stdin = io::stdin();
+    //let stdin = io::stdin();
     let stdout = io::stdout();
-    let importer = DefaultImporter::with_stdio(stdin.lock(), stdout.lock());
+    let importer = DefaultImporter::with_stdio(io::stdin(), stdout.lock());
     let interuption_clone = Arc::clone(&INTERUPTION);
     let snapshot_bytes_ref = Arc::clone(&SNAPSHOT_BYTES);
     let interuption_implementer = Arc::new(Implementer::new(interuption_clone, snapshot_bytes_ref));
@@ -599,6 +599,11 @@ pub struct Resume {
     pub message: Vec<u8>
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Input {
+    pub key: String
+}
+
 
 /// This function is used to resume execution of a WebAssembly module from snapshot.
 /// TODO: Wain must be run in a new thread, otherwise response will be block until
@@ -618,4 +623,17 @@ pub async fn resume(payload: web::Json<Value>) -> impl Responder {
         "status": "success",
         "message": "valid snapshot received"
     }))   
+}
+
+/// This function is used to provide input from demo web GUI to WebAssembly module running in the supervisor
+pub async fn input(payload: web::Json<Value>) -> impl Responder {
+    let data = payload.into_inner();
+    let input: Input = serde_json::from_value(data.clone()).unwrap();
+    let binding = input.key;
+    //println!("{}", &binding);
+    let mut guarded = INPUT.lock().unwrap();
+    *guarded = binding;
+    HttpResponse::Ok().json(json!({
+        "status": "success"
+    }))
 }

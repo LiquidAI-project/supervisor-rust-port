@@ -1,6 +1,8 @@
-use crate::lib::memory::Memory;
+use crate::lib::{constants::INPUT, memory::Memory};
 use crate::lib::stack::Stack;
-use std::io::{Read, Write};
+use std::{io::{Read, Write}, thread, time::Duration};
+use rand::Rng;
+use termion::event::Key;
 use crate::lib::wain_ast::ValType;
 
 pub enum ImportInvalidError {
@@ -39,6 +41,7 @@ pub fn check_func_signature(
 pub struct DefaultImporter<R: Read, W: Write> {
     stdout: W,
     stdin: R,
+    nb_reader: Option<termion::AsyncReader>
 }
 
 impl<R: Read, W: Write> Drop for DefaultImporter<R, W> {
@@ -49,7 +52,19 @@ impl<R: Read, W: Write> Drop for DefaultImporter<R, W> {
 
 impl<R: Read, W: Write> DefaultImporter<R, W> {
     pub fn with_stdio(stdin: R, stdout: W) -> Self {
-        Self { stdout, stdin }
+        Self { stdout, stdin, nb_reader: None }
+    }
+
+    fn usleep(&mut self, stack: &mut Stack) {
+        let v: i32 = stack.pop();
+        thread::sleep(Duration::from_micros(v as u64));
+        stack.push(0);
+    }
+
+    fn rand(&mut self, stack: &mut Stack) {
+        let mut rng = rand::thread_rng();
+        let v: u32 = rng.gen_range(0..0xFFFFFFFF);
+        stack.push(v as i32);
     }
 
     // (func (param i32) (result i32))
@@ -61,6 +76,34 @@ impl<R: Read, W: Write> DefaultImporter<R, W> {
             Err(_) => -1, // EOF
         };
         stack.push(ret);
+    }
+
+    fn getchar_nonblocking(&mut self, stack: &mut Stack) {
+        use termion::raw::IntoRawMode;
+        let reader = self.nb_reader.get_or_insert_with(termion::async_stdin);
+        let _raw = std::io::stdout().into_raw_mode();
+        let mut buf = [0u8];
+        let v = match reader.read(&mut buf) {
+            Ok(n) if n > 0 => buf[0] as i32,
+            _ => -1,
+        };
+        stack.push(v);
+    }
+
+    fn readkey(&mut self, stack: &mut Stack) {
+        let mut guarded = INPUT.lock().unwrap();
+        let key = guarded.clone().chars().nth(0).unwrap();
+        *guarded = " ".to_string();
+        let v = match key {
+            'w' => 65,
+            's' => 66,
+            'd' => 67,
+            'a' => 68,
+            'q' => 113,
+            'p' => 112,
+            _ => -1
+        };
+        stack.push(v);
     }
 
     // (func () (result i32))
@@ -111,6 +154,10 @@ impl<R: Read, W: Write> Importer for DefaultImporter<R, W> {
             "putchar" => check_func_signature(params, ret, &[I32], Some(I32)),
             "getchar" => check_func_signature(params, ret, &[], Some(I32)),
             "memcpy" => check_func_signature(params, ret, &[I32, I32, I32], Some(I32)),
+            "usleep" => check_func_signature(params, ret, &[I32], Some(I32)),
+            "rand" => check_func_signature(params, ret, &[], Some(I32)),
+            "getchar_nonblocking" => check_func_signature(params, ret, &[], Some(I32)),
+            "readkey" => check_func_signature(params, ret, &[], Some(I32)),
             "abort" => check_func_signature(params, ret, &[], None),
             _ => Some(ImportInvalidError::NotFound),
         }
@@ -130,6 +177,22 @@ impl<R: Read, W: Write> Importer for DefaultImporter<R, W> {
                 message: "aborted".to_string(),
             }),
             "memcpy" => self.memcpy(stack, memory),
+            "usleep" => {
+                self.usleep(stack);
+                Ok(())
+            },
+            "rand" => {
+                self.rand(stack);
+                Ok(())
+            },
+            "getchar_nonblocking" => {
+                self.getchar_nonblocking(stack);
+                Ok(())
+            },
+            "readkey" => {
+                self.readkey(stack);
+                Ok(())
+            }
             _ => unreachable!("fatal: invalid import function '{}'", name),
         }
     }

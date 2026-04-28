@@ -16,7 +16,7 @@ use parking_lot::Mutex;
 use supervisor::api::deployment::{deployment_create, deployment_delete, deployment_get};
 use supervisor::api::device::{register_orchestrator, thingi_description, thingi_health, wasmiot_device_description};
 use supervisor::api::results::{get_bytes, get_module_result, request_history_list, request_history_list_1};
-use supervisor::api::run::{interupt, resume, run_module_function, run_module_function_3};
+use supervisor::api::run::{input, interupt, resume, run_module_function, run_module_function_3};
 use supervisor::structs::deployment_supervisor::Deployment;
 use std::sync::Arc;
 use supervisor::lib::{zeroconf, constants};
@@ -248,6 +248,12 @@ async fn main() -> std::io::Result<()> {
                 web::resource("/resume")
                 .name("/resume")
                 .route(web::post().to(resume))
+            )
+            // This service is used for game input
+            .service(
+                web::resource("/input")
+                .name("/input")
+                .route(web::post().to(input))
             )
     })
     .bind(("0.0.0.0", port))?;
