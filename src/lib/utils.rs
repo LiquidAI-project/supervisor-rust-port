@@ -96,3 +96,17 @@ pub fn unwrap<T, E: fmt::Display>(phase: &'static str, result: Result<T, E>) -> 
         }
     }
 }
+
+pub fn ip_to_i32(ip: String) -> i32 {
+    let octets: Vec<u8> = ip
+        .split('.')
+        .map(|o| o.parse::<u8>().expect("invalid IP octet"))
+        .collect();
+    assert!(octets.len() == 4, "IP address must have 4 octets");
+    i32::from_be_bytes([octets[0], octets[1], octets[2], octets[3]])
+}
+
+pub fn i32_to_ip(compressed_ip: i32) -> String {
+    let bytes = compressed_ip.to_be_bytes();
+    format!("{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3])
+}

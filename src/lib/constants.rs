@@ -88,7 +88,8 @@ pub const STD_FUNCTIONS: &[&str] = &[
     "usleep",
     "rand",
     "getchar_nonblocking",
-    "readkey"
+    "readkey",
+    "send_char"
 ];
 
 

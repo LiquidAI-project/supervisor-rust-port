@@ -62,7 +62,7 @@ type ExecResult = Result<ExecState>;
 pub struct ModuleInstance<'module, 'source> {
     ast: &'module ast::Module<'source>,
     table: Table,   // Only one table is allowed for MVP
-    memory: Memory, // Only one memory is allowed for MVP
+    pub(crate) memory: Memory, // Only one memory is allowed for MVP
     globals: Globals,
 }
 
@@ -78,7 +78,7 @@ pub struct ModuleInstanceSerializable<'a> {
     globals: Globals,
 }
 pub struct Runtime<'module, 'source, I: Importer> {
-    module: ModuleInstance<'module, 'source>,
+    pub(crate) module: ModuleInstance<'module, 'source>,
     stack: Stack,
     importer: I,
     interupt: Arc<Implementer>,
@@ -545,6 +545,7 @@ impl Snapshot for RuntimeSerialisable<'_> {
     fn resume_execution(&self, interuption_method: Arc<Implementer>) -> std::result::Result<(), Box<Trap>> {
         //let stdin = io::stdin();
         let stdout = io::stdout();
+        //TODO: Load ip from memory
         let importer = DefaultImporter::with_stdio(io::stdin(), stdout.lock());
         let mut runtime = Runtime {
             module: ModuleInstance {

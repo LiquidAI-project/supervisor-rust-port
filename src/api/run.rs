@@ -22,7 +22,7 @@ use crate::lib::interuption::interuption_impl::Implementer;
 use crate::lib::logging::send_log;
 use crate::lib::runtime::{Runtime, RuntimeSerialisable, Snapshot};
 use crate::{function_name, lib};
-use crate::lib::utils::{get_params_path, make_output_url};
+use crate::lib::utils::{get_params_path, ip_to_i32, make_output_url};
 use indexmap::IndexMap;
 use crate::structs::request_entry::RequestEntry;
 use crate::structs::deployment_supervisor::{CallData, EndpointArgs, EndpointData, MountStage};
@@ -196,7 +196,7 @@ pub async fn run_module_function(
         ).await;
     });
 
-    let (entry, final_opt) = make_history(entry).await;
+    let (entry, final_opt) = make_history(entry, req).await;
     let http_scheme = env::var("DEFAULT_URL_SCHEME").unwrap_or_else(|_| {
         error!("Failed to read DEFAULT_URL_SCHEME from enviroment variables, defaulting to 'http'.");
         "http".to_string()
@@ -249,10 +249,10 @@ pub async fn run_module_function_3(
 /// # Returns
 /// - The updated `RequestEntry` with result and success set
 /// - An optional `Value` containing the final result from the execution
-pub async fn make_history(mut entry: RequestEntry) -> (RequestEntry, Option<Value>) {
+pub async fn make_history(mut entry: RequestEntry, req: HttpRequest) -> (RequestEntry, Option<Value>) {
     let mut final_opt: Option<Value> = None;
 
-    match do_wasm_work(&mut entry).await {
+    match do_wasm_work(&mut entry, req).await {
         Ok(final_json) => {
             entry.success = true;
             final_opt = Some(final_json);
@@ -287,7 +287,7 @@ pub async fn make_history(mut entry: RequestEntry) -> (RequestEntry, Option<Valu
 /// 2. Interprets its result,
 /// 3. Initiates a next call if the deployment specifies one,
 /// 4. Returns the result or sub-response.
-pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
+pub async fn do_wasm_work(entry: &mut RequestEntry, req: HttpRequest) -> Result<Value, String> {
     let mut deployments = DEPLOYMENTS.lock();
     let deployment = deployments.get_mut(&entry.deployment_id)
         .ok_or_else(|| format!("Deployment '{}' not found", entry.deployment_id))?;
@@ -347,11 +347,15 @@ pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
     let ast = unwrap("", lib::wain_syntax_binary::parse(&bin));
     //let stdin = io::stdin();
     let stdout = io::stdout();
+    let ip = req.peer_addr().unwrap().ip().to_string();
+    //TODO: Endpoint must be delivered in the payload
+    //let importer = DefaultImporter::with_stdio_peer(io::stdin(), stdout.lock(), ip.clone());
     let importer = DefaultImporter::with_stdio(io::stdin(), stdout.lock());
     let interuption_clone = Arc::clone(&INTERUPTION);
     let snapshot_bytes_ref = Arc::clone(&SNAPSHOT_BYTES);
     let interuption_implementer = Arc::new(Implementer::new(interuption_clone, snapshot_bytes_ref));
     let mut runtime = unwrap("",Runtime::instantiate(&ast.module, importer, interuption_implementer));
+    let _ = runtime.module.memory.store(0, ip_to_i32(ip), 0);
     let _ = runtime.invoke("_start", &[]);
 
 

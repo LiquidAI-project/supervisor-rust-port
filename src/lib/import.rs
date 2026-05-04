@@ -1,8 +1,8 @@
 use crate::lib::{constants::INPUT, memory::Memory};
 use crate::lib::stack::Stack;
+use std::net::{Shutdown, TcpStream};
 use std::{io::{Read, Write}, thread, time::Duration};
 use rand::Rng;
-use termion::event::Key;
 use crate::lib::wain_ast::ValType;
 
 pub enum ImportInvalidError {
@@ -41,18 +41,28 @@ pub fn check_func_signature(
 pub struct DefaultImporter<R: Read, W: Write> {
     stdout: W,
     stdin: R,
-    nb_reader: Option<termion::AsyncReader>
+    nb_reader: Option<termion::AsyncReader>,
+    out_stream: Option<std::net::TcpStream>
 }
 
 impl<R: Read, W: Write> Drop for DefaultImporter<R, W> {
     fn drop(&mut self) {
         let _ = self.stdout.flush();
+        if let Some(stream) = &self.out_stream {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+        //let _ = self.out_stream.as_ref().unwrap().shutdown(Shutdown::Both);
     }
 }
 
 impl<R: Read, W: Write> DefaultImporter<R, W> {
-    pub fn with_stdio(stdin: R, stdout: W) -> Self {
-        Self { stdout, stdin, nb_reader: None }
+    pub fn with_stdio(stdin: R, stdout: W) -> Self {  
+        Self { stdout, stdin, nb_reader: None, out_stream: None } //TODO: endpoint details from module memory Some(TcpStream::connect("172.16.0.1:3000").unwrap())
+    }
+
+    pub fn with_stdio_peer(stdin: R, stdout: W, ip: String) -> Self {
+        let addr = format!("http://{}:{}", ip, 3005);
+        Self { stdout, stdin, nb_reader: None, out_stream: Some(TcpStream::connect(addr).unwrap()) }
     }
 
     fn usleep(&mut self, stack: &mut Stack) {
@@ -76,6 +86,17 @@ impl<R: Read, W: Write> DefaultImporter<R, W> {
             Err(_) => -1, // EOF
         };
         stack.push(ret);
+    }
+
+    fn send_char(&mut self, stack: &mut Stack) {
+        let v: i32 = stack.pop();
+        let mut b = Vec::new();
+        b.push(v as u8);
+        match self.out_stream {
+            Some(_) => self.out_stream.as_ref().unwrap().write_all(&b).unwrap(),
+            None => {},
+        }
+        stack.push(v);
     }
 
     fn getchar_nonblocking(&mut self, stack: &mut Stack) {
@@ -158,6 +179,7 @@ impl<R: Read, W: Write> Importer for DefaultImporter<R, W> {
             "rand" => check_func_signature(params, ret, &[], Some(I32)),
             "getchar_nonblocking" => check_func_signature(params, ret, &[], Some(I32)),
             "readkey" => check_func_signature(params, ret, &[], Some(I32)),
+            "send_char" => check_func_signature(params, ret, &[I32], Some(I32)),
             "abort" => check_func_signature(params, ret, &[], None),
             _ => Some(ImportInvalidError::NotFound),
         }
@@ -180,17 +202,21 @@ impl<R: Read, W: Write> Importer for DefaultImporter<R, W> {
             "usleep" => {
                 self.usleep(stack);
                 Ok(())
-            },
+            }
             "rand" => {
                 self.rand(stack);
                 Ok(())
-            },
+            }
             "getchar_nonblocking" => {
                 self.getchar_nonblocking(stack);
                 Ok(())
-            },
+            }
             "readkey" => {
                 self.readkey(stack);
+                Ok(())
+            }
+            "send_char" => {
+                self.send_char(stack);
                 Ok(())
             }
             _ => unreachable!("fatal: invalid import function '{}'", name),
