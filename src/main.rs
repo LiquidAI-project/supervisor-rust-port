@@ -140,6 +140,7 @@ async fn main() -> std::io::Result<()> {
             actix_web::middleware::Logger::default()
         )
         .app_data(Data::new(zc_arc.clone()))  // Pass the Zeroconf instance to the app
+        .app_data(web::JsonConfig::default().limit(64 * 1024 * 1024)) // 64 MB JSON payload limit
         .service(
                 web::resource("/.well-known/wasmiot-device-description")
                     .name("/.well-known/wasmiot-device-description")
