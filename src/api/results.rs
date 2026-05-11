@@ -1,9 +1,11 @@
 
+use std::sync::atomic::Ordering;
+
 use actix_files::NamedFile;
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use serde_json::json;
 
-use crate::{function_name, lib::{constants::{REQUEST_HISTORY, SNAPSHOT_BYTES}, logging::send_log, utils::get_params_path}};
+use crate::{function_name, lib::{constants::{INTERUPTION, REQUEST_HISTORY, SNAPSHOT_BYTES}, logging::send_log, utils::get_params_path}};
 
 
 /// Serves a file produced as output by a WebAssembly module.
@@ -88,6 +90,7 @@ pub async fn get_bytes() -> impl Responder {
     let mut guarded = SNAPSHOT_BYTES.lock().unwrap(); 
     let bytes = guarded.clone();
     *guarded = Vec::new();
+    INTERUPTION.store(false, Ordering::Relaxed);
     HttpResponse::Ok().json(json!({
         "status": "success",
         "message": bytes
