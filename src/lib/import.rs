@@ -1,3 +1,4 @@
+use crate::lib::constants::GUI_ENDPOINT;
 use crate::lib::{constants::INPUT, memory::Memory};
 use crate::lib::stack::Stack;
 use std::net::{Shutdown, TcpStream};
@@ -57,12 +58,20 @@ impl<R: Read, W: Write> Drop for DefaultImporter<R, W> {
 
 impl<R: Read, W: Write> DefaultImporter<R, W> {
     pub fn with_stdio(stdin: R, stdout: W) -> Self {  
-        Self { stdout, stdin, nb_reader: None, out_stream: None } //TODO: endpoint details from module memory Some(TcpStream::connect("172.16.0.1:3000").unwrap())
-    }
-
-    pub fn with_stdio_peer(stdin: R, stdout: W, ip: String) -> Self {
-        let addr = format!("http://{}:{}", ip, 3005);
-        Self { stdout, stdin, nb_reader: None, out_stream: Some(TcpStream::connect(addr).unwrap()) }
+        //let gui_url = std::env::var("GUI_ENDPOINT_URL").unwrap_or_else(|_| "172.17.71.25:3000".to_string());
+        let guarded = GUI_ENDPOINT.lock().unwrap();
+        let gui_url = &guarded.clone();
+        if *gui_url == "".to_string() {
+            return Self { stdout, stdin, nb_reader: None, out_stream: None }
+        }
+        let stream = TcpStream::connect(gui_url);
+        match stream {
+            Ok(_) => Self { stdout, stdin, nb_reader: None, out_stream: Some(stream.unwrap()) },
+            Err(error) => {
+                println!("{}", error);
+                return Self { stdout, stdin, nb_reader: None, out_stream: None }
+            }
+        }
     }
 
     fn usleep(&mut self, stack: &mut Stack) {
@@ -79,13 +88,14 @@ impl<R: Read, W: Write> DefaultImporter<R, W> {
 
     // (func (param i32) (result i32))
     fn putchar(&mut self, stack: &mut Stack) {
-        let v: i32 = stack.pop();
-        let b = v as u8;
-        let ret = match self.stdout.write(&[b]) {
-            Ok(_) => b as i32,
-            Err(_) => -1, // EOF
-        };
-        stack.push(ret);
+        //let v: i32 = stack.pop();
+        //let b = v as u8;
+        //let ret = match self.stdout.write(&[b]) {
+        //    Ok(_) => b as i32,
+        //    Err(_) => -1, // EOF
+        //};
+        //stack.push(ret);
+        self.send_char(stack);
     }
 
     fn send_char(&mut self, stack: &mut Stack) {

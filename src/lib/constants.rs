@@ -238,6 +238,19 @@ pub static REQUEST_HISTORY: Lazy<Mutex<Vec<RequestEntry>>> = Lazy::new(|| Mutex:
 
 pub static INTERUPTION: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
+/// Buffer for snapshot bytes
+
 pub static SNAPSHOT_BYTES: Lazy<Arc<std::sync::Mutex<Vec<u8>>>> = Lazy::new(|| Arc::new(std::sync::Mutex::new(Vec::new())));
 
+/// Variable to store latest input received from GUI
+
 pub static INPUT: Lazy<Arc<std::sync::Mutex<String>>> = Lazy::new(|| Arc::new(std::sync::Mutex::new(" ".to_string())));
+
+/// Variable to store ip and port of stream for sending output TODO: if execution is moved to another machine, should the output still go to same stream?
+
+// pub static GUI_ENDPOINT: Lazy<Arc<std::sync::Mutex<String>>> = Lazy::new(|| Arc::new(std::sync::Mutex::new("".to_string())));
+pub static GUI_ENDPOINT: Lazy<Arc<std::sync::Mutex<String>>> = Lazy::new(|| {
+    Arc::new(std::sync::Mutex::new(
+        std::env::var("GUI_ENDPOINT_URL").unwrap_or_default(),
+    ))
+});

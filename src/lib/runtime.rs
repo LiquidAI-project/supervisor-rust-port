@@ -1,6 +1,7 @@
 use std::io::{self};
 use std::sync::Arc;
 
+use crate::lib::constants::GUI_ENDPOINT;
 use crate::lib::globals::Globals;
 use crate::lib::import::{ImportInvalidError, ImportInvokeError, Importer};
 use crate::lib::memory::Memory;
@@ -93,6 +94,7 @@ pub struct RuntimeSerialisable<'a> {
     stack: Stack,
     frame_stack: Vec<ControlFrame>,
     stack_trace: Vec<ControlFrame>,
+    gui_endpoint: String
 }
 
 /**
@@ -218,11 +220,12 @@ impl<'m, 's, I: Importer> Runtime<'m, 's, I> {
                 ast: self.module.ast.clone(),
                 table: self.module.table.clone(),
                 memory: self.module.memory.clone(),
-                globals: self.module.globals.clone(),
+                globals: self.module.globals.clone()
             },
             stack: self.stack.clone(),
             frame_stack: self.frame_stack.clone(),
             stack_trace: self.frame_stack.clone(),
+            gui_endpoint: GUI_ENDPOINT.lock().unwrap().clone()
         }
     }
 
@@ -543,9 +546,7 @@ impl Snapshot for RuntimeSerialisable<'_> {
     }
 
     fn resume_execution(&self, interuption_method: Arc<Implementer>) -> std::result::Result<(), Box<Trap>> {
-        //let stdin = io::stdin();
         let stdout = io::stdout();
-        //TODO: Load ip from memory
         let importer = DefaultImporter::with_stdio(io::stdin(), stdout.lock());
         let mut runtime = Runtime {
             module: ModuleInstance {
@@ -560,7 +561,9 @@ impl Snapshot for RuntimeSerialisable<'_> {
             frame_stack: self.frame_stack.clone(),
             stack_trace: self.stack_trace.clone(),
         };
-        //Don't invoke execution if you're measuring how long it takes to get everything ready with criterio-bench
+        let mut guarded = GUI_ENDPOINT.lock().unwrap();
+        *guarded = self.gui_endpoint.clone();
+        drop(guarded);
         let _ = runtime.invoke("_start", &[]);
         Ok(())
     }

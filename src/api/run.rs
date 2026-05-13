@@ -16,7 +16,7 @@ use futures_util::StreamExt;
 use std::fs::File;
 use std::{env, io};
 use std::io::Write;
-use crate::lib::constants::{DEPLOYMENTS, INPUT, INTERUPTION, MAX_DEPLOYMENT_STEPS, REQUEST_HISTORY, SNAPSHOT_BYTES};
+use crate::lib::constants::{DEPLOYMENTS, GUI_ENDPOINT, INPUT, INTERUPTION, MAX_DEPLOYMENT_STEPS, REQUEST_HISTORY, SNAPSHOT_BYTES};
 use crate::lib::import::DefaultImporter;
 use crate::lib::interuption::interuption_impl::Implementer;
 use crate::lib::logging::send_log;
@@ -347,15 +347,19 @@ pub async fn do_wasm_work(entry: &mut RequestEntry, req: HttpRequest) -> Result<
     let ast = unwrap("", lib::wain_syntax_binary::parse(&bin));
     //let stdin = io::stdin();
     let stdout = io::stdout();
-    let ip = req.peer_addr().unwrap().ip().to_string();
-    //TODO: Endpoint must be delivered in the payload
-    //let importer = DefaultImporter::with_stdio_peer(io::stdin(), stdout.lock(), ip.clone());
+    //let ip = req.peer_addr().unwrap().ip().to_string();
+    //let port = req.peer_addr().unwrap().port();
+    //TODO: Endpoint must be delivered in the payload?
+    //let mut guarded = GUI_ENDPOINT.lock().unwrap();
+    //let endpoint = format!("http://{}:{}", ip, port);
+    //*guarded = endpoint;
+    //drop(guarded);
     let importer = DefaultImporter::with_stdio(io::stdin(), stdout.lock());
     let interuption_clone = Arc::clone(&INTERUPTION);
     let snapshot_bytes_ref = Arc::clone(&SNAPSHOT_BYTES);
     let interuption_implementer = Arc::new(Implementer::new(interuption_clone, snapshot_bytes_ref));
     let mut runtime = unwrap("",Runtime::instantiate(&ast.module, importer, interuption_implementer));
-    let _ = runtime.module.memory.store(0, ip_to_i32(ip), 0);
+    //let _ = runtime.module.memory.store(0, ip_to_i32(ip), 0);
     let _ = runtime.invoke("_start", &[]);
 
 
