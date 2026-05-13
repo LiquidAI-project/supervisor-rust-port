@@ -1,6 +1,7 @@
 use actix_web::{web, HttpResponse, Responder};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::env;
 use crate::lib::logging::send_log;
 use crate::function_name;
 use crate::lib::utils::{get_deployment_path, get_module_path, get_params_path, save_deployment_to_disk};
@@ -19,6 +20,22 @@ use crate::structs::deployment_supervisor::{
 use crate::structs::deployment_orchestrator::{DeploymentDoc as OrchDeploymentDoc, Step as OrchStep};
 
 
+/// Rewrites the host and port of `url` to match `WASMIOT_ORCHESTRATOR_URL`.
+/// This is needed because the orchestrator runs in a container and its URLs
+/// contain the container-internal address, which is unreachable from outside.
+fn rewrite_to_orchestrator_host(url: &str) -> String {
+    let orch_url = env::var("WASMIOT_ORCHESTRATOR_URL").unwrap_or_default();
+    let parsed_orch = reqwest::Url::parse(&orch_url).ok();
+    let parsed_url = reqwest::Url::parse(url).ok();
+    match (parsed_orch, parsed_url) {
+        (Some(orch), Some(mut target)) => {
+            let _ = target.set_host(orch.host_str());
+            let _ = target.set_port(orch.port());
+            target.to_string()
+        }
+        _ => url.to_string(),
+    }
+}
 
 
 
@@ -142,7 +159,8 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
     let mut errors = Vec::new();
 
     for (module_id, (module_name, module)) in &module_map {
-        let binary_url = module.urls.binary.clone();
+        let binary_url = rewrite_to_orchestrator_host(&module.urls.binary);
+        //let binary_url = module.urls.binary.clone();
         let bin_response = match reqwest::get(&binary_url).await {
             Ok(resp) if resp.status().is_success() => resp,
             Ok(resp) => {
@@ -187,7 +205,8 @@ pub async fn deployment_create(payload: web::Json<Value>) -> impl Responder {
 
         let mut data_files = HashMap::new();
         for (filename, url) in &module.urls.other {
-            match reqwest::get(url).await {
+            match reqwest::get(rewrite_to_orchestrator_host(url)).await {
+            //match reqwest::get(url).await {
                 Ok(resp) if resp.status().is_success() => {
                     match resp.bytes().await {
                         Ok(file_bytes) => {
