@@ -7,25 +7,24 @@ use actix_files::NamedFile;
 use serde_json::{json, Value};
 use chrono::Utc;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering;
 use log::{debug, error, warn};
-use wasmtime::Val;
 use sanitize_filename;
 use futures_util::StreamExt;
 use std::fs::File;
 use std::{env, io};
 use std::io::Write;
-use crate::lib::constants::{DEPLOYMENTS, GUI_ENDPOINT, INPUT, INTERUPTION, MAX_DEPLOYMENT_STEPS, REQUEST_HISTORY, SNAPSHOT_BYTES};
+use crate::lib::constants::{DEPLOYMENTS, INPUT, INTERUPTION, MAX_DEPLOYMENT_STEPS, REQUEST_HISTORY, SNAPSHOT_BYTES, SNAPSHOT_CHAIN_CONTEXT};
 use crate::lib::import::DefaultImporter;
 use crate::lib::interuption::interuption_impl::Implementer;
 use crate::lib::logging::send_log;
 use crate::lib::runtime::{Runtime, RuntimeSerialisable, Snapshot};
 use crate::{function_name, lib};
-use crate::lib::utils::{get_params_path, ip_to_i32, make_output_url};
+use crate::lib::utils::{get_params_path, make_output_url};
 use indexmap::IndexMap;
 use crate::structs::request_entry::RequestEntry;
-use crate::structs::deployment_supervisor::{CallData, EndpointArgs, EndpointData, MountStage};
+use crate::structs::deployment_supervisor::{CallData, Endpoint, EndpointArgs, EndpointData, MountStage};
 use std::fs;
 use crate::lib::utils::{unwrap};
 
@@ -128,7 +127,7 @@ pub async fn run_module_function(
     
     // Handle multipart file uploads (for POST only)
     let mut request_files: HashMap<String, String> = HashMap::new();
-    
+
     let is_post = req.method() == "POST";
     if is_post {
         let mut multipart = Multipart::new(&req.headers(), payload);
@@ -287,7 +286,7 @@ pub async fn make_history(mut entry: RequestEntry, req: HttpRequest) -> (Request
 /// 2. Interprets its result,
 /// 3. Initiates a next call if the deployment specifies one,
 /// 4. Returns the result or sub-response.
-pub async fn do_wasm_work(entry: &mut RequestEntry, req: HttpRequest) -> Result<Value, String> {
+pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result<Value, String> {
     let mut deployments = DEPLOYMENTS.lock();
     let deployment = deployments.get_mut(&entry.deployment_id)
         .ok_or_else(|| format!("Deployment '{}' not found", entry.deployment_id))?;
@@ -339,37 +338,60 @@ pub async fn do_wasm_work(entry: &mut RequestEntry, req: HttpRequest) -> Result<
     //    Vec::new(),
     //    return_count,
     //).await;
-    let output_vals = Vec::new();
+    //let output_vals: Vec<char> = Vec::new();
+
+    // Resolve and save chain context while the deployment lock is held.
+    // This is read back by get_bytes and included in the snapshot response so
+    // that any machine resuming the snapshot knows which endpoint to call next.
+    let next_ep_opt = deployment
+        .next_target_with_index(&entry.module_name, &entry.function_name, entry.step_index)
+        .cloned();
+    let cur_response_opt = deployment.endpoints
+        .get(&entry.module_name)
+        .and_then(|m| m.get(&entry.function_name))
+        .map(|ep| ep.response.clone());
+    *SNAPSHOT_CHAIN_CONTEXT.lock() = json!({
+        "step_index": entry.step_index,
+        "next_endpoint": serde_json::to_value(&next_ep_opt).unwrap_or(Value::Null),
+        "current_response": serde_json::to_value(&cur_response_opt).unwrap_or(Value::Null),
+    });
 
     let config = deployment.modules.get(&entry.module_name.clone()).unwrap();
     //cofing.path should be the path to .wasm file on disk
     let bin = fs::read(&config.path).unwrap();
     let ast = unwrap("", lib::wain_syntax_binary::parse(&bin));
-    //let stdin = io::stdin();
     let stdout = io::stdout();
-    //let ip = req.peer_addr().unwrap().ip().to_string();
-    //let port = req.peer_addr().unwrap().port();
-    //TODO: Endpoint must be delivered in the payload?
-    //let mut guarded = GUI_ENDPOINT.lock().unwrap();
-    //let endpoint = format!("http://{}:{}", ip, port);
-    //*guarded = endpoint;
-    //drop(guarded);
-    let importer = DefaultImporter::with_stdio(io::stdin(), stdout.lock());
+    let output_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let importer = DefaultImporter::with_stdio(io::stdin(), stdout.lock(), Arc::clone(&output_buf));
     let interuption_clone = Arc::clone(&INTERUPTION);
     let snapshot_bytes_ref = Arc::clone(&SNAPSHOT_BYTES);
     let interuption_implementer = Arc::new(Implementer::new(interuption_clone, snapshot_bytes_ref));
     let mut runtime = unwrap("",Runtime::instantiate(&ast.module, importer, interuption_implementer));
     //let _ = runtime.module.memory.store(0, ip_to_i32(ip), 0);
-    let _ = runtime.invoke("_start", &[]);
+    let _ = runtime.invoke(&entry.function_name, &[]);
+    drop(runtime); // Release the StdoutLock before any chained HTTP calls
 
+    // If the wasm was interrupted and a snapshot was taken, stop here.
+    // The chain context was already saved above; it will be returned by get_bytes
+    // so the orchestrator can include it in the resume request.
+    if !SNAPSHOT_BYTES.lock().unwrap().is_empty() {
+        return Ok(json!({ "snapshotted": true }));
+    }
 
-    let raw_output = output_vals.first().map(|v| match v {
-        Val::I32(i) => json!(i),
-        Val::I64(i) => json!(i),
-        Val::F32(f) => json!(f32::from_bits(*f)),
-        Val::F64(f) => json!(f64::from_bits(*f)),
-        _ => Value::Null,
-    }).unwrap_or(Value::Null);
+    let captured = output_buf.lock().unwrap();
+    let raw_output = if captured.is_empty() {
+        Value::Null
+    } else {
+        Value::String(String::from_utf8_lossy(&captured).into_owned())
+    };
+    drop(captured);
+    //let raw_output = output_vals.first().map(|v| match v {
+    //    Val::I32(i) => json!(i),
+    //    Val::I64(i) => json!(i),
+    //    Val::F32(f) => json!(f32::from_bits(*f)),
+    //    Val::F64(f) => json!(f64::from_bits(*f)),
+    //    _ => Value::Null,
+    //}).unwrap_or(Value::Null);
 
     let raw_output_clone = raw_output.clone();
     let entry_clone = entry.clone();
@@ -620,17 +642,72 @@ pub struct Input {
 /// TODO: Response under development
 pub async fn resume(payload: web::Json<Value>) -> impl Responder {
     let data = payload.into_inner();
-    let snapshot: Resume = serde_json::from_value(data.clone()).unwrap();
+    let snapshot: Resume = serde_json::from_value(data).unwrap();
+
     let binding = snapshot.message;
     let runtime_serialisable: RuntimeSerialisable = rmp_serde::from_slice(&binding).unwrap();
     let interuption_clone = Arc::clone(&INTERUPTION);
     let snapshot_bytes_ref = Arc::clone(&SNAPSHOT_BYTES);
     let interuption_implementer = Arc::new(Implementer::new(interuption_clone, snapshot_bytes_ref));
-    let _ = runtime_serialisable.resume_execution(interuption_implementer);
+
+    let output_buf = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let _ = runtime_serialisable.resume_execution(interuption_implementer, Arc::clone(&output_buf));
+    // resume_execution restores SNAPSHOT_CHAIN_CONTEXT from the snapshot, read it here
+    let chain_context = SNAPSHOT_CHAIN_CONTEXT.lock().clone();
+
+    // Capture whatever the wasm wrote to stdout during resumed execution
+    let raw_output = {
+        let captured = output_buf.lock().unwrap();
+        if captured.is_empty() {
+            Value::Null
+        } else {
+            Value::String(String::from_utf8_lossy(&captured).into_owned())
+        }
+    };
+
+    // Continue the chain using the context that was saved at snapshot time
+    let step_index = chain_context.get("step_index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let next_ep_val = chain_context.get("next_endpoint").cloned().unwrap_or(Value::Null);
+
+    if !next_ep_val.is_null() {
+        if let Ok(next_endpoint) = serde_json::from_value::<Endpoint>(next_ep_val) {
+            let url = format!("{}{}", next_endpoint.url.trim_end_matches('/'), next_endpoint.path);
+            let next_idx = step_index.saturating_add(1);
+
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                reqwest::header::HeaderName::from_static("x-chain-step"),
+                reqwest::header::HeaderValue::from_str(&next_idx.to_string()).unwrap(),
+            );
+
+            // Pass scalar wasm output as a query parameter if present
+            let final_url = match raw_output.as_str() {
+                Some(s) if !s.is_empty() => {
+                    let param_name = next_endpoint.request.parameters.first()
+                        .and_then(|p| p.get("name"))
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("result");
+                    format!("{}?{}={}", url, param_name, s)
+                }
+                _ => url,
+            };
+
+            let client = reqwest::Client::new();
+            let _ = client
+                .request(
+                    next_endpoint.method.to_uppercase().parse().unwrap_or(reqwest::Method::POST),
+                    &final_url,
+                )
+                .headers(headers)
+                .send()
+                .await;
+        }
+    }
+
     HttpResponse::Ok().json(json!({
         "status": "success",
         "message": "valid snapshot received"
-    }))   
+    }))
 }
 
 /// This function is used to provide input from demo web GUI to WebAssembly module running in the supervisor

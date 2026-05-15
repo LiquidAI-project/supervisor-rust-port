@@ -1,7 +1,8 @@
 use std::io::{self};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use serde_json::Value as JsonValue;
 
-use crate::lib::constants::GUI_ENDPOINT;
+use crate::lib::constants::SNAPSHOT_CHAIN_CONTEXT;
 use crate::lib::globals::Globals;
 use crate::lib::import::{ImportInvalidError, ImportInvokeError, Importer};
 use crate::lib::memory::Memory;
@@ -85,6 +86,7 @@ pub struct Runtime<'module, 'source, I: Importer> {
     interupt: Arc<Implementer>,
     frame_stack: Vec<ControlFrame>, //Purpose of these fields is to record stack so that it can be rebuilt when resuming execution from snapshot
     stack_trace: Vec<ControlFrame>,
+    function_name: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -94,7 +96,8 @@ pub struct RuntimeSerialisable<'a> {
     stack: Stack,
     frame_stack: Vec<ControlFrame>,
     stack_trace: Vec<ControlFrame>,
-    gui_endpoint: String
+    chain_context: JsonValue,
+    function_name: String,
 }
 
 /**
@@ -203,6 +206,7 @@ impl<'m, 's, I: Importer> Runtime<'m, 's, I> {
             interupt: interuption_method,
             frame_stack: Vec::new(),
             stack_trace: Vec::new(),
+            function_name: String::new(),
         };
 
         // 15. If the start function is not empty, invoke it
@@ -225,7 +229,8 @@ impl<'m, 's, I: Importer> Runtime<'m, 's, I> {
             stack: self.stack.clone(),
             frame_stack: self.frame_stack.clone(),
             stack_trace: self.frame_stack.clone(),
-            gui_endpoint: GUI_ENDPOINT.lock().unwrap().clone()
+            chain_context: SNAPSHOT_CHAIN_CONTEXT.lock().clone(),
+            function_name: self.function_name.clone(),
         }
     }
 
@@ -356,6 +361,7 @@ impl<'m, 's, I: Importer> Runtime<'m, 's, I> {
         }
 
         let name = name.as_ref();
+        self.function_name = name.to_string();
         let (funcidx, start) = find_func_to_invoke(name, &self.module.ast.exports)?;
         let arg_types = &self.module.ast.types[self.module.ast.funcs[funcidx as usize].idx as usize].params;
 
@@ -526,7 +532,7 @@ impl<'m, 's, I: Importer> Execute<'m, 's, I> for Vec<ast::Instruction> {
  */
 pub trait Snapshot {
     fn snapshot(&self);
-    fn resume_execution(&self, interuption_method: Arc<Implementer>) -> Result<()>;
+    fn resume_execution(&self, interuption_method: Arc<Implementer>, output_buf: Arc<Mutex<Vec<u8>>>) -> Result<()>;
 }
 
 impl<'m, 's, I: Importer> Snapshot for Runtime<'m, 's, I> {
@@ -535,7 +541,7 @@ impl<'m, 's, I: Importer> Snapshot for Runtime<'m, 's, I> {
         self.interupt.store_snapshot_bytes(buf);
     }
 
-    fn resume_execution(&self, _interuption_method: Arc<Implementer>) -> std::result::Result<(), Box<Trap>> {
+    fn resume_execution(&self, _interuption_method: Arc<Implementer>, _output_buf: Arc<Mutex<Vec<u8>>>) -> std::result::Result<(), Box<Trap>> {
         todo!("Not implemented!")
     }
 }
@@ -545,9 +551,9 @@ impl Snapshot for RuntimeSerialisable<'_> {
         todo!("Not implemented!")
     }
 
-    fn resume_execution(&self, interuption_method: Arc<Implementer>) -> std::result::Result<(), Box<Trap>> {
+    fn resume_execution(&self, interuption_method: Arc<Implementer>, output_buf: Arc<Mutex<Vec<u8>>>) -> std::result::Result<(), Box<Trap>> {
         let stdout = io::stdout();
-        let importer = DefaultImporter::with_stdio(io::stdin(), stdout.lock());
+        let importer = DefaultImporter::with_stdio(io::stdin(), stdout.lock(), output_buf);
         let mut runtime = Runtime {
             module: ModuleInstance {
                 ast: &self.module.ast.clone(),
@@ -560,11 +566,10 @@ impl Snapshot for RuntimeSerialisable<'_> {
             interupt: interuption_method,
             frame_stack: self.frame_stack.clone(),
             stack_trace: self.stack_trace.clone(),
+            function_name: self.function_name.clone(),
         };
-        let mut guarded = GUI_ENDPOINT.lock().unwrap();
-        *guarded = self.gui_endpoint.clone();
-        drop(guarded);
-        let _ = runtime.invoke("_start", &[]);
+        *SNAPSHOT_CHAIN_CONTEXT.lock() = self.chain_context.clone();
+        let _ = runtime.invoke(&self.function_name, &[]);
         Ok(())
     }
 }

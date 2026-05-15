@@ -3,6 +3,7 @@ use crate::lib::{constants::INPUT, memory::Memory};
 use crate::lib::stack::Stack;
 use std::net::{Shutdown, TcpStream};
 use std::{io::{Read, Write}, thread, time::Duration};
+use std::sync::{Arc, Mutex};
 use rand::Rng;
 use crate::lib::wain_ast::ValType;
 
@@ -43,7 +44,8 @@ pub struct DefaultImporter<R: Read, W: Write> {
     stdout: W,
     stdin: R,
     nb_reader: Option<termion::AsyncReader>,
-    out_stream: Option<std::net::TcpStream>
+    out_stream: Option<std::net::TcpStream>,
+    pub output_buf: Arc<Mutex<Vec<u8>>>,
 }
 
 impl<R: Read, W: Write> Drop for DefaultImporter<R, W> {
@@ -57,19 +59,18 @@ impl<R: Read, W: Write> Drop for DefaultImporter<R, W> {
 }
 
 impl<R: Read, W: Write> DefaultImporter<R, W> {
-    pub fn with_stdio(stdin: R, stdout: W) -> Self {  
-        //let gui_url = std::env::var("GUI_ENDPOINT_URL").unwrap_or_else(|_| "172.17.71.25:3000".to_string());
+    pub fn with_stdio(stdin: R, stdout: W, output_buf: Arc<Mutex<Vec<u8>>>) -> Self {
         let guarded = GUI_ENDPOINT.lock().unwrap();
         let gui_url = &guarded.clone();
         if *gui_url == "".to_string() {
-            return Self { stdout, stdin, nb_reader: None, out_stream: None }
+            return Self { stdout, stdin, nb_reader: None, out_stream: None, output_buf }
         }
         let stream = TcpStream::connect(gui_url);
         match stream {
-            Ok(_) => Self { stdout, stdin, nb_reader: None, out_stream: Some(stream.unwrap()) },
+            Ok(tcp_stream) => Self { stdout, stdin, nb_reader: None, out_stream: Some(tcp_stream), output_buf },
             Err(error) => {
                 println!("{}", error);
-                return Self { stdout, stdin, nb_reader: None, out_stream: None }
+                return Self { stdout, stdin, nb_reader: None, out_stream: None, output_buf }
             }
         }
     }
@@ -100,11 +101,10 @@ impl<R: Read, W: Write> DefaultImporter<R, W> {
 
     fn send_char(&mut self, stack: &mut Stack) {
         let v: i32 = stack.pop();
-        let mut b = Vec::new();
-        b.push(v as u8);
-        match self.out_stream {
-            Some(_) => self.out_stream.as_ref().unwrap().write_all(&b).unwrap(),
-            None => {},
+        let b = v as u8;
+        self.output_buf.lock().unwrap().push(b);
+        if let Some(stream) = &mut self.out_stream {
+            let _ = stream.write_all(&[b]);
         }
         stack.push(v);
     }

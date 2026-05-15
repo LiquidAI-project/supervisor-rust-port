@@ -17,6 +17,7 @@ use std::{collections::HashMap, path::PathBuf};
 use std::fs;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
+use serde_json::Value;
 use sysinfo::{System, Networks, Disks};
 
 use crate::structs::deployment_supervisor::Deployment;
@@ -239,16 +240,18 @@ pub static REQUEST_HISTORY: Lazy<Mutex<Vec<RequestEntry>>> = Lazy::new(|| Mutex:
 pub static INTERUPTION: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
 /// Buffer for snapshot bytes
-
 pub static SNAPSHOT_BYTES: Lazy<Arc<std::sync::Mutex<Vec<u8>>>> = Lazy::new(|| Arc::new(std::sync::Mutex::new(Vec::new())));
+
+/// Chain context saved at snapshot time so the resume can continue the procedure chain.
+/// Contains step_index, next_endpoint, and current_response as a JSON value.
+pub static SNAPSHOT_CHAIN_CONTEXT: Lazy<Mutex<Value>> = Lazy::new(|| Mutex::new(Value::Null));
 
 /// Variable to store latest input received from GUI
 
 pub static INPUT: Lazy<Arc<std::sync::Mutex<String>>> = Lazy::new(|| Arc::new(std::sync::Mutex::new(" ".to_string())));
 
-/// Variable to store ip and port of stream for sending output TODO: if execution is moved to another machine, should the output still go to same stream?
+/// Variable to store ip and port of stream for sending output
 
-// pub static GUI_ENDPOINT: Lazy<Arc<std::sync::Mutex<String>>> = Lazy::new(|| Arc::new(std::sync::Mutex::new("".to_string())));
 pub static GUI_ENDPOINT: Lazy<Arc<std::sync::Mutex<String>>> = Lazy::new(|| {
     Arc::new(std::sync::Mutex::new(
         std::env::var("GUI_ENDPOINT_URL").unwrap_or_default(),
