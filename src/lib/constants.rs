@@ -257,3 +257,7 @@ pub static GUI_ENDPOINT: Lazy<Arc<std::sync::Mutex<String>>> = Lazy::new(|| {
         std::env::var("GUI_ENDPOINT_URL").unwrap_or_default(),
     ))
 });
+
+/// Flag for indicating that the machine is on idle
+
+pub static IDLE: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(true)));

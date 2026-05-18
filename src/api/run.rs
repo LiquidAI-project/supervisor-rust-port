@@ -15,7 +15,7 @@ use futures_util::StreamExt;
 use std::fs::File;
 use std::{env, io};
 use std::io::Write;
-use crate::lib::constants::{DEPLOYMENTS, INPUT, INTERUPTION, MAX_DEPLOYMENT_STEPS, REQUEST_HISTORY, SNAPSHOT_BYTES, SNAPSHOT_CHAIN_CONTEXT};
+use crate::lib::constants::{DEPLOYMENTS, IDLE, INPUT, INTERUPTION, MAX_DEPLOYMENT_STEPS, REQUEST_HISTORY, SNAPSHOT_BYTES, SNAPSHOT_CHAIN_CONTEXT};
 use crate::lib::import::DefaultImporter;
 use crate::lib::interuption::interuption_impl::Implementer;
 use crate::lib::logging::send_log;
@@ -368,8 +368,10 @@ pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result
     let interuption_implementer = Arc::new(Implementer::new(interuption_clone, snapshot_bytes_ref));
     let mut runtime = unwrap("",Runtime::instantiate(&ast.module, importer, interuption_implementer));
     //let _ = runtime.module.memory.store(0, ip_to_i32(ip), 0);
+    IDLE.store(false, Ordering::Relaxed);
     let _ = runtime.invoke(&entry.function_name, &[]);
     drop(runtime); // Release the StdoutLock before any chained HTTP calls
+    IDLE.store(true, Ordering::Relaxed);
 
     // If the wasm was interrupted and a snapshot was taken, stop here.
     // The chain context was already saved above; it will be returned by get_bytes
@@ -720,5 +722,11 @@ pub async fn input(payload: web::Json<Value>) -> impl Responder {
     *guarded = binding;
     HttpResponse::Ok().json(json!({
         "status": "success"
+    }))
+}
+
+pub async fn idle() -> impl Responder {
+    HttpResponse::Ok().json(json!({
+        "idle": IDLE.load(Ordering::Relaxed)
     }))
 }

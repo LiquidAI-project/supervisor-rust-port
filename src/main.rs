@@ -16,7 +16,7 @@ use parking_lot::Mutex;
 use supervisor::api::deployment::{deployment_create, deployment_delete, deployment_get};
 use supervisor::api::device::{register_orchestrator, thingi_description, thingi_health, wasmiot_device_description};
 use supervisor::api::results::{get_bytes, get_module_result, request_history_list, request_history_list_1};
-use supervisor::api::run::{input, interupt, resume, run_module_function, run_module_function_3};
+use supervisor::api::run::{idle, input, interupt, resume, run_module_function, run_module_function_3};
 use supervisor::structs::deployment_supervisor::Deployment;
 use std::sync::Arc;
 use supervisor::lib::{zeroconf, constants};
@@ -255,6 +255,12 @@ async fn main() -> std::io::Result<()> {
                 web::resource("/input")
                 .name("/input")
                 .route(web::post().to(input))
+            )
+            // This service is used to check if machine is free for module execution
+            .service(
+                web::resource("/idle")
+                .name("/idle")
+                .route(web::get().to(idle))
             )
     })
     .bind(("0.0.0.0", port))?;
