@@ -15,6 +15,7 @@ use reqwest::Client;
 use crate::structs::request_entry::RequestEntry;
 use std::collections::HashMap;
 use log::{info, debug, warn, error};
+use std::time::Duration;
 
 /// Sends a structured log message to the configured external logging server,
 /// if remote logging is enabled via the `EXTERNAL_LOGGING_ENABLED` env var.
@@ -71,7 +72,11 @@ pub async fn send_log(
         }
 
         // Send log
-        let client = Client::new();
+        //let client = Client::new();
+        let client = Client::builder()
+            .timeout(Duration::from_secs(1))
+            .build()
+            .unwrap_or_default();
         let endpoint = env::var("WASMIOT_LOGGING_ENDPOINT")
             .unwrap_or_else(|_| "http://localhost:3000/device/logs".to_string());
 
