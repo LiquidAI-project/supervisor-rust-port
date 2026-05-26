@@ -3,6 +3,7 @@ pub mod interuption_impl {
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     };
+    use crate::lib::constants::SNAPSHOT_NOTIFY;
 
     /**
      * This trait was created for defining how execution of wain-exec can be
@@ -45,6 +46,8 @@ pub mod interuption_impl {
         pub fn store_snapshot_bytes(&self, bytes: Vec<u8>) {
             let mut guarded = self.buf.lock().unwrap();
             *guarded = bytes;
+            // Wake the /snapshot handler that is waiting for these bytes
+            SNAPSHOT_NOTIFY.notify_one();
         }
     }
 }

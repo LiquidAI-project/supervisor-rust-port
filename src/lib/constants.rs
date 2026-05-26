@@ -215,6 +215,15 @@ pub fn get_module_timeout() -> u64 {
         .unwrap_or(DEFAULT_MODULE_TIMEOUT_SECONDS)
 }
 
+/// How long the combined /snapshot endpoint waits for the wasm interpreter to produce a snapshot.
+/// Configurable via WASMIOT_SNAPSHOT_TIMEOUT_SECONDS; defaults to 30 s.
+pub fn get_snapshot_timeout() -> u64 {
+    std::env::var("WASMIOT_SNAPSHOT_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30)
+}
+
 pub const DEFAULT_SERVICE_RENEWAL_TIME: i64 = 900;  // 15 minutes in seconds
 
 pub(crate) static SYSTEM: Lazy<Mutex<System>> = Lazy::new(|| Mutex::new(System::new_all()));
@@ -259,5 +268,10 @@ pub static GUI_ENDPOINT: Lazy<Arc<std::sync::Mutex<String>>> = Lazy::new(|| {
 });
 
 /// Flag for indicating that the machine is on idle
-
 pub static IDLE: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(true)));
+
+/// Notifier fired by the wasm interpreter after it stores a snapshot.
+/// The combined /snapshot handler awaits this instead of polling, eliminating the race
+/// condition that required a fixed sleep on the orchestrator side.
+pub static SNAPSHOT_NOTIFY: Lazy<Arc<tokio::sync::Notify>> =
+    Lazy::new(|| Arc::new(tokio::sync::Notify::new()));

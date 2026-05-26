@@ -13,9 +13,9 @@ use log::{debug, error, warn};
 use sanitize_filename;
 use futures_util::StreamExt;
 use std::fs::File;
-use std::{env, io};
+use std::{env, io, time::Duration};
 use std::io::Write;
-use crate::lib::constants::{DEPLOYMENTS, IDLE, INPUT, INTERUPTION, MAX_DEPLOYMENT_STEPS, REQUEST_HISTORY, SNAPSHOT_BYTES, SNAPSHOT_CHAIN_CONTEXT};
+use crate::lib::constants::{DEPLOYMENTS, IDLE, INPUT, INTERUPTION, MAX_DEPLOYMENT_STEPS, REQUEST_HISTORY, SNAPSHOT_BYTES, SNAPSHOT_CHAIN_CONTEXT, SNAPSHOT_NOTIFY, get_snapshot_timeout};
 use crate::lib::import::DefaultImporter;
 use crate::lib::interuption::interuption_impl::Implementer;
 use crate::lib::logging::send_log;
@@ -118,7 +118,12 @@ pub async fn run_module_function(
         }));
     }
     drop(deployments_map); // Free the lock early
-    
+
+    // Reject concurrent executions — only one wasm module runs at a time
+    if !IDLE.load(Ordering::Relaxed) {
+        return HttpResponse::Conflict().json(json!({"error": "Machine is busy"}));
+    }
+
     // Parse query parameters into JSON
     let query_str = req.uri().query().unwrap_or("");
     let query_map: HashMap<String, String> =
@@ -367,7 +372,8 @@ pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result
     let snapshot_bytes_ref = Arc::clone(&SNAPSHOT_BYTES);
     let interuption_implementer = Arc::new(Implementer::new(interuption_clone, snapshot_bytes_ref));
     let mut runtime = unwrap("",Runtime::instantiate(&ast.module, importer, interuption_implementer));
-    //let _ = runtime.module.memory.store(0, ip_to_i32(ip), 0);
+    // Clear any leftover interrupt from a previous execution before starting
+    INTERUPTION.store(false, Ordering::Relaxed);
     IDLE.store(false, Ordering::Relaxed);
     let _ = runtime.invoke(&entry.function_name, &[]);
     drop(runtime); // Release the StdoutLock before any chained HTTP calls
@@ -615,8 +621,37 @@ pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result
     Ok(json!({ "result": entry.result }))
 }
 
-/// This function is used to interupt the execution of the current WebAssembly module.
-/// Bytes of the created snapshot will be stored into the buffer in SNAPSHOT_BYTES constant.
+/// Combined atomic snapshot endpoint: sets the interrupt flag and blocks until the wasm
+/// interpreter has stored a snapshot, then returns the bytes and chain context directly.
+/// Eliminates the race condition of the separate /interupt + /getSnapshot two-step flow.
+/// Timeout is configurable via WASMIOT_SNAPSHOT_TIMEOUT_SECONDS (default 30 s).
+pub async fn snapshot() -> impl Responder {
+    // Register the listener BEFORE setting the flag so a very fast snapshot is never missed
+    let notified = SNAPSHOT_NOTIFY.notified();
+    INTERUPTION.store(true, Ordering::Relaxed);
+
+    match tokio::time::timeout(Duration::from_secs(get_snapshot_timeout()), notified).await {
+        Ok(_) => {
+            let bytes = std::mem::take(&mut *SNAPSHOT_BYTES.lock().unwrap());
+            let chain_context = SNAPSHOT_CHAIN_CONTEXT.lock().clone();
+            INTERUPTION.store(false, Ordering::Relaxed);
+            HttpResponse::Ok().json(json!({
+                "status": "success",
+                "message": bytes,
+                "chain_context": chain_context
+            }))
+        }
+        Err(_) => {
+            INTERUPTION.store(false, Ordering::Relaxed);
+            HttpResponse::GatewayTimeout().json(json!({
+                "error": "No snapshot received within timeout"
+            }))
+        }
+    }
+}
+
+/// Deprecated: use GET /snapshot instead (atomic interrupt + fetch in one request).
+/// Sets the interrupt flag; the wasm interpreter will store a snapshot in SNAPSHOT_BYTES.
 pub async fn interupt() -> impl Responder {
     INTERUPTION.store(true, Ordering::Relaxed);
     HttpResponse::Ok().json(json!({
@@ -643,6 +678,13 @@ pub struct Input {
 /// check if Wain is already interpreting some module?
 /// TODO: Response under development
 pub async fn resume(payload: web::Json<Value>) -> impl Responder {
+    // Reject concurrent executions — only one wasm module runs at a time
+    if !IDLE.load(Ordering::Relaxed) {
+        return HttpResponse::Conflict().json(json!({"error": "Machine is busy"}));
+    }
+    // Clear any leftover interrupt from a previous execution before starting
+    INTERUPTION.store(false, Ordering::Relaxed);
+
     let data = payload.into_inner();
     let snapshot: Resume = serde_json::from_value(data).unwrap();
 
@@ -653,7 +695,12 @@ pub async fn resume(payload: web::Json<Value>) -> impl Responder {
     let interuption_implementer = Arc::new(Implementer::new(interuption_clone, snapshot_bytes_ref));
 
     let output_buf = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    //let mut guarded = INPUT.lock().unwrap();
+    //*guarded = String::new();
+    //drop(guarded);
+    IDLE.store(false, Ordering::Relaxed);
     let _ = runtime_serialisable.resume_execution(interuption_implementer, Arc::clone(&output_buf));
+    IDLE.store(true, Ordering::Relaxed);
     // resume_execution restores SNAPSHOT_CHAIN_CONTEXT from the snapshot, read it here
     let chain_context = SNAPSHOT_CHAIN_CONTEXT.lock().clone();
 
