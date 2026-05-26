@@ -200,7 +200,6 @@ pub async fn run_module_function(
         ).await;
     });
 
-    let (entry, final_opt) = make_history(entry, req).await;
     let http_scheme = env::var("DEFAULT_URL_SCHEME").unwrap_or_else(|_| {
         error!("Failed to read DEFAULT_URL_SCHEME from enviroment variables, defaulting to 'http'.");
         "http".to_string()
@@ -214,11 +213,9 @@ pub async fn run_module_function(
         "8080".to_string()
     });
     let result_url = format!("{}://{}:{}/request-history/{}", http_scheme, host, port, entry.request_id);
-    let mut resp = json!({ "resultUrl": result_url });
-    if let Some(final_json) = final_opt {
-        resp["result"] = final_json;
-    }
-    HttpResponse::Ok().json(resp)
+    IDLE.store(false, Ordering::Relaxed);
+    tokio::spawn(async move { make_history(entry, req).await; });
+    HttpResponse::Ok().json(json!({ "status": "started", "resultUrl": result_url }))
 }
 
 
@@ -284,70 +281,29 @@ pub async fn make_history(mut entry: RequestEntry, req: HttpRequest) -> (Request
 
 
 
-/// Executes the WebAssembly function for the given request and performs any chained subcalls.
+/// Outcome of synchronous wasm execution, passed back to the async do_wasm_work wrapper.
+struct WasmSyncResult {
+    /// True if wasm was interrupted and a snapshot was stored; other fields are meaningless.
+    snapshotted: bool,
+    raw_output: Value,
+    /// Files already opened for the chain call, keyed by name. Empty if no chain follows.
+    chain_files: HashMap<String, std::fs::File>,
+    next_call: Option<CallData>,
+}
+
+/// Synchronous wasm execution core. Runs on a dedicated blocking thread via spawn_blocking
+/// so the tokio worker is not occupied for the duration of wasm interpretation.
 ///
-/// This is the core logic that:
-/// 1. Prepares and runs the function,
-/// 2. Interprets its result,
-/// 3. Initiates a next call if the deployment specifies one,
-/// 4. Returns the result or sub-response.
-pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result<Value, String> {
+/// Takes ownership of entry, mutates result/outputs fields, and returns it together with
+/// the execution outcome. The deployment lock is acquired and released entirely here so
+/// it never crosses the await boundary in do_wasm_work.
+fn run_wasm_sync(mut entry: RequestEntry) -> Result<(RequestEntry, WasmSyncResult), String> {
     let mut deployments = DEPLOYMENTS.lock();
     let deployment = deployments.get_mut(&entry.deployment_id)
         .ok_or_else(|| format!("Deployment '{}' not found", entry.deployment_id))?;
 
-    let func_name = function_name!().to_string();
-    let module_name_clone = entry.module_name.clone();
-    let entry_clone = entry.clone();
-    task::spawn(async move {
-        send_log(
-            "DEBUG",
-            &format!("Preparing Wasm module '{}'", &module_name_clone),
-            &func_name,
-            Some(&entry_clone)
-        ).await;
-    });
-
-    let _request_args: IndexMap<String, Value> = entry.request_args //Not sure if Wain supports giving args to WebAssembly modules
-        .as_object()
-        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-        .unwrap_or_else(IndexMap::new);
-    //let (_module, wasm_args) = deployment.prepare_for_running( //Maybe this preparation phase is not necessary as Wain doesn't take import functions dynamically?
-    //    &entry.deployment_id,
-    //    &entry.module_name,
-    //    &entry.function_name,
-    //    &request_args,
-    //    &entry.request_files,
-    //).await?;
-
-    let func_name = function_name!().to_string();
-    let entry_function_name = entry.function_name.clone();
-    let entry_clone = entry.clone();
-    task::spawn(async move {
-        send_log(
-            "DEBUG",
-            &format!("Running Wasm function '{}'", &entry_function_name),
-            &func_name,
-            Some(&entry_clone)
-        ).await;
-    });
-
-    // Execute the wasm module. Change to use wain
-    //let runtime = deployment.runtimes.get_mut(&entry.module_name)
-    //    .ok_or_else(|| format!("Runtime not found for module '{}'", entry.module_name))?;
-//
-    //let return_count = runtime.get_return_types(&entry.module_name, &entry.function_name).await.len();
-    //let output_vals = runtime.run_function(
-    //    &entry.module_name,
-    //    &entry.function_name,
-    //    Vec::new(),
-    //    return_count,
-    //).await;
-    //let output_vals: Vec<char> = Vec::new();
-
     // Resolve and save chain context while the deployment lock is held.
-    // This is read back by get_bytes and included in the snapshot response so
-    // that any machine resuming the snapshot knows which endpoint to call next.
+    // Included in the /snapshot response so a resuming machine knows which endpoint is next.
     let next_ep_opt = deployment
         .next_target_with_index(&entry.module_name, &entry.function_name, entry.step_index)
         .cloned();
@@ -361,8 +317,7 @@ pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result
         "current_response": serde_json::to_value(&cur_response_opt).unwrap_or(Value::Null),
     });
 
-    let config = deployment.modules.get(&entry.module_name.clone()).unwrap();
-    //cofing.path should be the path to .wasm file on disk
+    let config = deployment.modules.get(&entry.module_name).unwrap();
     let bin = fs::read(&config.path).unwrap();
     let ast = unwrap("", lib::wain_syntax_binary::parse(&bin));
     let stdout = io::stdout();
@@ -371,49 +326,33 @@ pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result
     let interuption_clone = Arc::clone(&INTERUPTION);
     let snapshot_bytes_ref = Arc::clone(&SNAPSHOT_BYTES);
     let interuption_implementer = Arc::new(Implementer::new(interuption_clone, snapshot_bytes_ref));
-    let mut runtime = unwrap("",Runtime::instantiate(&ast.module, importer, interuption_implementer));
+    let mut runtime = unwrap("", Runtime::instantiate(&ast.module, importer, interuption_implementer));
     // Clear any leftover interrupt from a previous execution before starting
     INTERUPTION.store(false, Ordering::Relaxed);
-    IDLE.store(false, Ordering::Relaxed);
     let _ = runtime.invoke(&entry.function_name, &[]);
-    drop(runtime); // Release the StdoutLock before any chained HTTP calls
+    drop(runtime);
     IDLE.store(true, Ordering::Relaxed);
 
-    // If the wasm was interrupted and a snapshot was taken, stop here.
-    // The chain context was already saved above; it will be returned by get_bytes
-    // so the orchestrator can include it in the resume request.
+    // If the wasm was interrupted and a snapshot was taken, return early.
+    // Chain context was already saved above and will be returned by /snapshot.
     if !SNAPSHOT_BYTES.lock().unwrap().is_empty() {
-        return Ok(json!({ "snapshotted": true }));
+        return Ok((entry, WasmSyncResult {
+            snapshotted: true,
+            raw_output: Value::Null,
+            chain_files: HashMap::new(),
+            next_call: None,
+        }));
     }
 
-    let captured = output_buf.lock().unwrap();
-    let raw_output = if captured.is_empty() {
-        Value::Null
-    } else {
-        Value::String(String::from_utf8_lossy(&captured).into_owned())
+    // Capture wasm stdout output
+    let raw_output = {
+        let captured = output_buf.lock().unwrap();
+        if captured.is_empty() { Value::Null } else {
+            Value::String(String::from_utf8_lossy(&captured).into_owned())
+        }
     };
-    drop(captured);
-    //let raw_output = output_vals.first().map(|v| match v {
-    //    Val::I32(i) => json!(i),
-    //    Val::I64(i) => json!(i),
-    //    Val::F32(f) => json!(f32::from_bits(*f)),
-    //    Val::F64(f) => json!(f64::from_bits(*f)),
-    //    _ => Value::Null,
-    //}).unwrap_or(Value::Null);
 
-    let raw_output_clone = raw_output.clone();
-    let entry_clone = entry.clone();
-    let func_name = function_name!().to_string();
-    tokio::spawn(async move {
-        send_log(
-            "DEBUG",
-            &format!("... Result: {}", raw_output_clone),
-            &func_name,
-            Some(&entry_clone),
-        ).await;
-    });
-
-    // Parse current endpoint result according to its declared media type
+    // Parse result according to the endpoint's declared media type
     let endpoint = &deployment.endpoints[&entry.module_name][&entry.function_name];
     let output_mounts = deployment
         .mounts
@@ -422,83 +361,35 @@ pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result
         .and_then(|sm| sm.get(&MountStage::OUTPUT))
         .cloned()
         .unwrap_or_default();
-
     let parsed = deployment.parse_endpoint_result(raw_output.clone(), &endpoint.response, &output_mounts);
 
-    // Result into entry
-    if let Some(val) = &parsed.0 {
-        let func_name = function_name!().to_string();
-        let entry_clone = entry.clone();
-        let val_clone = val.clone();
-        task::spawn( async move {
-            send_log(
-                "DEBUG",
-                &format!("Execution result (parsed): {:?}", &val_clone),
-                &func_name,
-                Some(&entry_clone)
-            ).await;
-        });
-    }
+    // Update entry output URLs
     if let Some(EndpointData::StrList(filenames)) = &parsed.1 {
-        if let Some(filename) = filenames.first() {
-            let result_url = make_output_url(&entry.deployment_id, &entry.module_name, filename);
-            entry.outputs = filenames.iter()
-                .map(|f| make_output_url(&entry.deployment_id, &entry.module_name, f))
-                .collect();
-
-            let func_name = function_name!().to_string();
-            let entry_clone = entry.clone();
-            let result_url_clone = result_url.clone();
-            task::spawn(async move {
-                send_log(
-                    "DEBUG",
-                    &format!("Result URL: {}", &result_url_clone),
-                    &func_name,
-                    Some(&entry_clone),
-                ).await;
-            });
-        }
+        entry.outputs = filenames.iter()
+            .map(|f| make_output_url(&entry.deployment_id, &entry.module_name, f))
+            .collect();
     }
 
+    // Update entry result
     entry.result = parsed.0.clone().map(|arg| match arg {
         EndpointArgs::Str(s) => Value::String(s),
         EndpointArgs::StrList(vs) => Value::Array(vs.into_iter().map(Value::String).collect()),
         EndpointArgs::Dict(map) => Value::Object(map.into_iter().collect()),
     });
 
-    // Decide next step
+    // Determine next chain step
     let step_index = entry.step_index;
     let next_call = deployment
         .next_target_with_index(&entry.module_name, &entry.function_name, step_index)
-        .map(|next_ep|CallData::from_endpoint(next_ep, parsed.0.clone(), parsed.1.clone()));
+        .map(|next_ep| CallData::from_endpoint(next_ep, parsed.0.clone(), parsed.1.clone()));
 
-    log::info!("Step index {}", step_index);
-    log::info!("Next call: {:?}", next_call);
-
-    // If there is a next call, chain it
-    if let Some(call_data) = next_call {
-
-        // Prepare file parts (if any)
-        let mut files = HashMap::new();
+    // Open chain-call files while the deployment lock is still held
+    let mut chain_files = HashMap::new();
+    if let Some(ref call_data) = next_call {
         let current_module_cfg = deployment.modules
             .get(&entry.module_name)
             .ok_or_else(|| format!("Module config not found for '{}'", entry.module_name))?;
-        let current_params_dir =
-            get_params_path(&entry.deployment_id, &current_module_cfg.id, None);
-
-        // if let EndpointData::StrList(file_names) = &call_data.files {
-        //     for name in file_names {
-        //         let full_path = current_params_dir.join(name);
-        //         let file = std::fs::File::open(&full_path)
-        //             .map_err(|e| format!(
-        //                 "Failed to open file for subcall ({}): {}",
-        //                 full_path.display(),
-        //                 e
-        //             ))?;
-        //         files.insert(name.clone(), file);
-        //     }
-        // }
-
+        let current_params_dir = get_params_path(&entry.deployment_id, &current_module_cfg.id, None);
         match &call_data.files {
             EndpointData::StrList(file_names) => {
                 for name in file_names {
@@ -506,16 +397,85 @@ pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result
                     let file = std::fs::File::open(&full_path)
                         .map_err(|e| format!(
                             "Failed to open file for subcall ({}): {}",
-                            full_path.display(),
-                            e
+                            full_path.display(), e
                         ))?;
-                    files.insert(name.clone(), file);
+                    chain_files.insert(name.clone(), file);
                 }
             }
         }
+    }
 
+    drop(deployments);
 
-        // Build headers (include incremented step)
+    Ok((entry, WasmSyncResult { snapshotted: false, raw_output, chain_files, next_call }))
+}
+
+/// Executes the WebAssembly function for the given request and performs any chained subcalls.
+///
+/// Runs the blocking wasm interpreter on a dedicated thread via spawn_blocking, then handles
+/// async chain calls and logging on the caller's tokio task.
+pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result<Value, String> {
+    let func_name = function_name!().to_string();
+    let module_name_clone = entry.module_name.clone();
+    let entry_clone = entry.clone();
+    task::spawn(async move {
+        send_log("DEBUG", &format!("Preparing Wasm module '{}'", &module_name_clone), &func_name, Some(&entry_clone)).await;
+    });
+
+    let func_name = function_name!().to_string();
+    let entry_function_name = entry.function_name.clone();
+    let entry_clone = entry.clone();
+    task::spawn(async move {
+        send_log("DEBUG", &format!("Running Wasm function '{}'", &entry_function_name), &func_name, Some(&entry_clone)).await;
+    });
+
+    let entry_for_sync = entry.clone();
+    let (returned_entry, sync_result) = tokio::task::spawn_blocking(move || {
+        run_wasm_sync(entry_for_sync)
+    })
+    .await
+    .map_err(|e| format!("Wasm execution task panicked: {}", e))??;
+
+    // Apply mutations from the sync execution back to the caller's entry
+    let step_index = returned_entry.step_index;
+    entry.result = returned_entry.result;
+    entry.outputs = returned_entry.outputs;
+
+    if sync_result.snapshotted {
+        return Ok(json!({ "snapshotted": true }));
+    }
+
+    let func_name = function_name!().to_string();
+    let raw_output_clone = sync_result.raw_output.clone();
+    let entry_clone = entry.clone();
+    tokio::spawn(async move {
+        send_log("DEBUG", &format!("... Result: {}", raw_output_clone), &func_name, Some(&entry_clone)).await;
+    });
+
+    if let Some(val) = &entry.result {
+        let func_name = function_name!().to_string();
+        let entry_clone = entry.clone();
+        let val_clone = val.clone();
+        task::spawn(async move {
+            send_log("DEBUG", &format!("Execution result (parsed): {:?}", &val_clone), &func_name, Some(&entry_clone)).await;
+        });
+    }
+
+    if !entry.outputs.is_empty() {
+        let func_name = function_name!().to_string();
+        let entry_clone = entry.clone();
+        let urls_clone = entry.outputs.clone();
+        task::spawn(async move {
+            send_log("DEBUG", &format!("Result URLs: {:?}", &urls_clone), &func_name, Some(&entry_clone)).await;
+        });
+    }
+
+    log::info!("Step index {}", step_index);
+    log::info!("Next call: {:?}", sync_result.next_call);
+
+    if let Some(call_data) = sync_result.next_call {
+        let next_idx = step_index.saturating_add(1);
+
         let mut headers = reqwest::header::HeaderMap::new();
         for (k, v) in &call_data.headers {
             if let (Ok(key), Ok(val)) = (
@@ -525,7 +485,6 @@ pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result
                 headers.insert(key, val);
             }
         }
-        let next_idx = step_index.saturating_add(1);
         headers.insert(
             reqwest::header::HeaderName::from_static("x-chain-step"),
             reqwest::header::HeaderValue::from_str(&next_idx.to_string()).unwrap(),
@@ -544,36 +503,27 @@ pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result
             ).await;
         });
 
-        drop(deployments);
-
-        // Prepare multipart form
+        // Build multipart form from pre-opened files
         let mut form = reqwest::multipart::Form::new();
-
-        for (name, mut file) in files {
+        for (name, mut file) in sync_result.chain_files {
             let mut buf = Vec::new();
             use std::io::Read;
             file.read_to_end(&mut buf).map_err(|e| format!("Failed to read file for multipart: {}", e))?;
-
             form = form.part(name.clone(), reqwest::multipart::Part::bytes(buf).file_name(name));
         }
 
-        // Build request
         let client = reqwest::Client::new();
-        let req_builder = client
+        let response = client
             .request(
                 call_data.method.to_uppercase().parse().unwrap_or(reqwest::Method::POST),
-                &call_data.url
+                &call_data.url,
             )
             .headers(headers)
-            .multipart(form);
-
-        // Send
-        let response = req_builder
+            .multipart(form)
             .send()
             .await
             .map_err(|e| format!("Failed to send chained request: {}", e))?;
 
-        // Assume JSON response from the chained call
         let chained_json: Value = response
             .json()
             .await
@@ -586,12 +536,10 @@ pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result
                 }
                 _ => res_val.clone(),
             };
-
             entry.success = true;
             return Ok(final_val);
         }
 
-        // If there's a resultUrl, fetch it (also expected to be JSON)
         if let Some(url) = chained_json.get("resultUrl").and_then(|v| v.as_str()) {
             let fetched_json: Value = client
                 .get(url)
@@ -602,18 +550,11 @@ pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result
                 .await
                 .map_err(|e| format!("Invalid JSON from resultUrl {}: {}", url, e))?;
 
-            // If the fetched JSON contains a "result" key, return that; else return the fetched JSON.
-            let final_json: Value = fetched_json
-                .get("result")
-                .cloned()
-                .unwrap_or_else(|| fetched_json.clone());
-
-            // Return the final JSON, but dont overwrite own results in history with it
+            let final_json = fetched_json.get("result").cloned().unwrap_or(fetched_json);
             entry.success = true;
             return Ok(final_json);
         }
 
-        // No resultUrl -> record and return the original chained JSON
         entry.success = true;
         return Ok(chained_json);
     }
@@ -699,63 +640,69 @@ pub async fn resume(payload: web::Json<Value>) -> impl Responder {
     //*guarded = String::new();
     //drop(guarded);
     IDLE.store(false, Ordering::Relaxed);
-    let _ = runtime_serialisable.resume_execution(interuption_implementer, Arc::clone(&output_buf));
-    IDLE.store(true, Ordering::Relaxed);
-    // resume_execution restores SNAPSHOT_CHAIN_CONTEXT from the snapshot, read it here
-    let chain_context = SNAPSHOT_CHAIN_CONTEXT.lock().clone();
 
-    // Capture whatever the wasm wrote to stdout during resumed execution
-    let raw_output = {
-        let captured = output_buf.lock().unwrap();
-        if captured.is_empty() {
-            Value::Null
-        } else {
-            Value::String(String::from_utf8_lossy(&captured).into_owned())
-        }
-    };
+    let handle = tokio::runtime::Handle::current();
+    std::thread::spawn(move || {
+        let _ = runtime_serialisable.resume_execution(interuption_implementer, Arc::clone(&output_buf));
+        IDLE.store(true, Ordering::Relaxed);
 
-    // Continue the chain using the context that was saved at snapshot time
-    let step_index = chain_context.get("step_index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-    let next_ep_val = chain_context.get("next_endpoint").cloned().unwrap_or(Value::Null);
+        // resume_execution restores SNAPSHOT_CHAIN_CONTEXT from the snapshot, read it here
+        let chain_context = SNAPSHOT_CHAIN_CONTEXT.lock().clone();
 
-    if !next_ep_val.is_null() {
-        if let Ok(next_endpoint) = serde_json::from_value::<Endpoint>(next_ep_val) {
-            let url = format!("{}{}", next_endpoint.url.trim_end_matches('/'), next_endpoint.path);
-            let next_idx = step_index.saturating_add(1);
+        // Capture whatever the wasm wrote to stdout during resumed execution
+        let raw_output = {
+            let captured = output_buf.lock().unwrap();
+            if captured.is_empty() {
+                Value::Null
+            } else {
+                Value::String(String::from_utf8_lossy(&captured).into_owned())
+            }
+        };
 
-            let mut headers = reqwest::header::HeaderMap::new();
-            headers.insert(
-                reqwest::header::HeaderName::from_static("x-chain-step"),
-                reqwest::header::HeaderValue::from_str(&next_idx.to_string()).unwrap(),
-            );
+        // Continue the chain using the context that was saved at snapshot time
+        let step_index = chain_context.get("step_index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let next_ep_val = chain_context.get("next_endpoint").cloned().unwrap_or(Value::Null);
 
-            // Pass scalar wasm output as a query parameter if present
-            let final_url = match raw_output.as_str() {
-                Some(s) if !s.is_empty() => {
-                    let param_name = next_endpoint.request.parameters.first()
-                        .and_then(|p| p.get("name"))
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("result");
-                    format!("{}?{}={}", url, param_name, s)
+        handle.block_on(async move {
+            if !next_ep_val.is_null() {
+                if let Ok(next_endpoint) = serde_json::from_value::<Endpoint>(next_ep_val) {
+                    let url = format!("{}{}", next_endpoint.url.trim_end_matches('/'), next_endpoint.path);
+                    let next_idx = step_index.saturating_add(1);
+
+                    let mut headers = reqwest::header::HeaderMap::new();
+                    headers.insert(
+                        reqwest::header::HeaderName::from_static("x-chain-step"),
+                        reqwest::header::HeaderValue::from_str(&next_idx.to_string()).unwrap(),
+                    );
+
+                    // Pass scalar wasm output as a query parameter if present
+                    let final_url = match raw_output.as_str() {
+                        Some(s) if !s.is_empty() => {
+                            let param_name = next_endpoint.request.parameters.first()
+                                .and_then(|p| p.get("name"))
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("result");
+                            format!("{}?{}={}", url, param_name, s)
+                        }
+                        _ => url,
+                    };
+
+                    let client = reqwest::Client::new();
+                    let _ = client
+                        .request(
+                            next_endpoint.method.to_uppercase().parse().unwrap_or(reqwest::Method::POST),
+                            &final_url,
+                        )
+                        .headers(headers)
+                        .send()
+                        .await;
                 }
-                _ => url,
-            };
-
-            let client = reqwest::Client::new();
-            let _ = client
-                .request(
-                    next_endpoint.method.to_uppercase().parse().unwrap_or(reqwest::Method::POST),
-                    &final_url,
-                )
-                .headers(headers)
-                .send()
-                .await;
-        }
-    }
+            }
+        });
+    });
 
     HttpResponse::Ok().json(json!({
-        "status": "success",
-        "message": "valid snapshot received"
+        "status": "started"
     }))
 }
 
