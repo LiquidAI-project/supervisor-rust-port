@@ -22,7 +22,6 @@ use crate::lib::logging::send_log;
 use crate::lib::runtime::{Runtime, RuntimeSerialisable, Snapshot};
 use crate::{function_name, lib};
 use crate::lib::utils::{get_params_path, make_output_url};
-use indexmap::IndexMap;
 use crate::structs::request_entry::RequestEntry;
 use crate::structs::deployment_supervisor::{CallData, Endpoint, EndpointArgs, EndpointData, MountStage};
 use std::fs;
@@ -214,7 +213,7 @@ pub async fn run_module_function(
     });
     let result_url = format!("{}://{}:{}/request-history/{}", http_scheme, host, port, entry.request_id);
     IDLE.store(false, Ordering::Relaxed);
-    tokio::spawn(async move { make_history(entry, req).await; });
+    tokio::spawn(async move { make_history(entry).await; });
     HttpResponse::Ok().json(json!({ "status": "started", "resultUrl": result_url }))
 }
 
@@ -250,10 +249,10 @@ pub async fn run_module_function_3(
 /// # Returns
 /// - The updated `RequestEntry` with result and success set
 /// - An optional `Value` containing the final result from the execution
-pub async fn make_history(mut entry: RequestEntry, req: HttpRequest) -> (RequestEntry, Option<Value>) {
+pub async fn make_history(mut entry: RequestEntry) -> (RequestEntry, Option<Value>) {
     let mut final_opt: Option<Value> = None;
 
-    match do_wasm_work(&mut entry, req).await {
+    match do_wasm_work(&mut entry).await {
         Ok(final_json) => {
             entry.success = true;
             final_opt = Some(final_json);
@@ -414,7 +413,7 @@ fn run_wasm_sync(mut entry: RequestEntry) -> Result<(RequestEntry, WasmSyncResul
 ///
 /// Runs the blocking wasm interpreter on a dedicated thread via spawn_blocking, then handles
 /// async chain calls and logging on the caller's tokio task.
-pub async fn do_wasm_work(entry: &mut RequestEntry, _req: HttpRequest) -> Result<Value, String> {
+pub async fn do_wasm_work(entry: &mut RequestEntry) -> Result<Value, String> {
     let func_name = function_name!().to_string();
     let module_name_clone = entry.module_name.clone();
     let entry_clone = entry.clone();
@@ -630,7 +629,6 @@ pub async fn resume(payload: web::Json<Value>) -> impl Responder {
     let snapshot: Resume = serde_json::from_value(data).unwrap();
 
     let binding = snapshot.message;
-    let runtime_serialisable: RuntimeSerialisable = rmp_serde::from_slice(&binding).unwrap();
     let interuption_clone = Arc::clone(&INTERUPTION);
     let snapshot_bytes_ref = Arc::clone(&SNAPSHOT_BYTES);
     let interuption_implementer = Arc::new(Implementer::new(interuption_clone, snapshot_bytes_ref));
@@ -643,6 +641,7 @@ pub async fn resume(payload: web::Json<Value>) -> impl Responder {
 
     let handle = tokio::runtime::Handle::current();
     std::thread::spawn(move || {
+        let runtime_serialisable: RuntimeSerialisable = rmp_serde::from_slice(&binding).unwrap();
         let _ = runtime_serialisable.resume_execution(interuption_implementer, Arc::clone(&output_buf));
         IDLE.store(true, Ordering::Relaxed);
 
