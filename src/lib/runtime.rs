@@ -86,7 +86,7 @@ pub struct Runtime<'module, 'source, I: Importer> {
     interupt: Arc<Implementer>,
     frame_stack: Vec<ControlFrame>, //Purpose of these fields is to record stack so that it can be rebuilt when resuming execution from snapshot
     stack_trace: Vec<ControlFrame>,
-    function_name: String,
+    function_name: String, //This field is for icwe26 demo purposes only and not part of wasm spec or snapshot functionality
 }
 
 #[derive(Serialize, Deserialize)]
@@ -96,8 +96,8 @@ pub struct RuntimeSerialisable<'a> {
     stack: Stack,
     frame_stack: Vec<ControlFrame>,
     stack_trace: Vec<ControlFrame>,
-    chain_context: JsonValue,
-    function_name: String,
+    chain_context: JsonValue, //This field is for icwe26 demo purposes only and not part of wasm spec or snapshot functionality
+    function_name: String, //This field is for icwe26 demo purposes only and not part of wasm spec or snapshot functionality
 }
 
 /**
