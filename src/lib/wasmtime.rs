@@ -105,7 +105,6 @@ impl WasmtimeRuntime {
         
         let mut config: Config = Config::default();
         config.async_support(true);
-        config.epoch_interruption(true);
         let engine: Engine = Engine::new(&config).unwrap();
         let args = std::env::args().skip(1).collect::<Vec<_>>();
         let mut linker: Linker<Ctx> = Linker::new(&engine);
@@ -129,18 +128,7 @@ impl WasmtimeRuntime {
         let modules: HashMap<String, WasmtimeModule> = HashMap::new();
         let functions = None; // TODO: What exactly should this be?
 
-        // Spawn a task to increment the store epochs and eventually trigger timeouts
-        let engine_reference = store.engine().weak();
-        let _timeout_task = std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                if let Some(engine) = engine_reference.upgrade() {
-                    engine.increment_epoch();
-                } else {
-                    break;
-                }
-            }
-        });
+
 
         let mut runtime: WasmtimeRuntime = Self {
             engine,
@@ -363,13 +351,6 @@ impl WasmtimeRuntime {
 
     /// Run a function in the current wasm module with given parameters and return a given number of results
     pub async fn run_function(&mut self, module_name: &str, func_name: &str, params: Vec<Val>, returns: usize) -> Vec<Val>{
-        // Timeout for wasm module execution in seconds
-        let timeout = crate::lib::constants::get_module_timeout();
-        
-        // Set store deadline and behaviour to trap once deadline is reached
-        self.store.set_epoch_deadline(timeout);
-        self.store.epoch_deadline_trap();
-
         let params_thingy: &[Val] = &params;
         let returns_thingy: &mut[Val] = &mut vec![Val::I32(0); returns];
         info!("Attempting to run function {} from module {}...", func_name, module_name);
